@@ -1,0 +1,234 @@
+defmodule Cortex.Orchestration.Config.Validator do
+  @moduledoc """
+  Validates an orchestra `Config` struct for correctness.
+
+  Produces hard errors that block execution and soft warnings that are
+  returned alongside the config but do not prevent it from being used.
+
+  ## Hard Errors
+
+    - Non-empty project name
+    - Non-empty teams list
+    - Unique team names
+    - Each team has a lead with a non-empty role
+    - Each team has at least one task with a non-empty summary
+    - `depends_on` references must exist (no dangling refs)
+    - No self-references in `depends_on`
+    - No dependency cycles
+
+  ## Soft Warnings
+
+    - Team with more than 5 members
+    - Task with empty details
+    - Task with empty verify command
+
+  """
+
+  alias Cortex.Orchestration.Config
+
+  @doc """
+  Validates a `Config` struct.
+
+  Returns `{:ok, config, warnings}` if all hard validations pass, where
+  `warnings` is a list of warning strings (possibly empty).
+
+  Returns `{:error, errors}` if any hard validation fails, where `errors`
+  is a list of error strings.
+  """
+  @spec validate(Config.t()) :: {:ok, Config.t(), [String.t()]} | {:error, [String.t()]}
+  def validate(%Config{} = config) do
+    errors = collect_errors(config)
+
+    case errors do
+      [] ->
+        warnings = collect_warnings(config)
+        {:ok, config, warnings}
+
+      errors ->
+        {:error, errors}
+    end
+  end
+
+  # --- Hard Error Collection ---
+
+  defp collect_errors(config) do
+    []
+    |> validate_name(config)
+    |> validate_teams_present(config)
+    |> validate_unique_team_names(config)
+    |> validate_team_leads(config)
+    |> validate_team_tasks(config)
+    |> validate_depends_on(config)
+    |> validate_no_cycles(config)
+    |> Enum.reverse()
+  end
+
+  defp validate_name(errors, %Config{name: name}) do
+    if is_binary(name) and String.trim(name) != "" do
+      errors
+    else
+      ["name cannot be empty" | errors]
+    end
+  end
+
+  defp validate_teams_present(errors, %Config{teams: teams}) do
+    if is_list(teams) and length(teams) > 0 do
+      errors
+    else
+      ["teams list cannot be empty" | errors]
+    end
+  end
+
+  defp validate_unique_team_names(errors, %Config{teams: teams}) do
+    names = Enum.map(teams, & &1.name)
+    duplicates = names -- Enum.uniq(names)
+
+    case Enum.uniq(duplicates) do
+      [] -> errors
+      dupes -> ["duplicate team names: #{Enum.join(dupes, ", ")}" | errors]
+    end
+  end
+
+  defp validate_team_leads(errors, %Config{teams: teams}) do
+    Enum.reduce(teams, errors, fn team, acc ->
+      cond do
+        is_nil(team.lead) ->
+          ["team '#{team.name}' is missing a lead" | acc]
+
+        not is_binary(team.lead.role) or String.trim(team.lead.role) == "" ->
+          ["team '#{team.name}' lead must have a non-empty role" | acc]
+
+        true ->
+          acc
+      end
+    end)
+  end
+
+  defp validate_team_tasks(errors, %Config{teams: teams}) do
+    Enum.reduce(teams, errors, fn team, acc ->
+      cond do
+        not is_list(team.tasks) or Enum.empty?(team.tasks) ->
+          ["team '#{team.name}' must have at least one task" | acc]
+
+        Enum.any?(team.tasks, fn task ->
+          not is_binary(task.summary) or String.trim(task.summary) == ""
+        end) ->
+          ["team '#{team.name}' has a task with an empty summary" | acc]
+
+        true ->
+          acc
+      end
+    end)
+  end
+
+  defp validate_depends_on(errors, %Config{teams: teams}) do
+    known_names = MapSet.new(teams, & &1.name)
+
+    Enum.reduce(teams, errors, fn team, acc ->
+      depends = team.depends_on || []
+
+      acc =
+        if team.name in depends do
+          ["team '#{team.name}' has a self-reference in depends_on" | acc]
+        else
+          acc
+        end
+
+      dangling = Enum.filter(depends, fn dep -> dep not in known_names end)
+
+      case dangling do
+        [] -> acc
+        refs -> ["team '#{team.name}' depends on unknown teams: #{Enum.join(refs, ", ")}" | acc]
+      end
+    end)
+  end
+
+  defp validate_no_cycles(errors, %Config{teams: teams}) do
+    # Kahn's algorithm to detect cycles
+    team_names = Enum.map(teams, & &1.name)
+
+    # Build adjacency and in-degree maps
+    {adj, in_degree} =
+      Enum.reduce(teams, {%{}, Map.new(team_names, fn n -> {n, 0} end)}, fn team,
+                                                                            {adj_acc, deg_acc} ->
+        deps = team.depends_on || []
+
+        # For each dependency: dep -> team (dep must complete before team)
+        adj_acc =
+          Enum.reduce(deps, adj_acc, fn dep, a ->
+            Map.update(a, dep, [team.name], fn existing -> [team.name | existing] end)
+          end)
+
+        deg_acc = Map.put(deg_acc, team.name, length(deps))
+
+        {adj_acc, deg_acc}
+      end)
+
+    # Seed with zero in-degree nodes
+    queue = for {name, 0} <- in_degree, do: name
+
+    processed = process_queue(queue, adj, in_degree, 0)
+
+    if processed == length(team_names) do
+      errors
+    else
+      ["dependency cycle detected among teams" | errors]
+    end
+  end
+
+  defp process_queue([], _adj, _in_degree, count), do: count
+
+  defp process_queue([current | rest], adj, in_degree, count) do
+    dependents = Map.get(adj, current, [])
+
+    {new_queue_additions, new_in_degree} =
+      Enum.reduce(dependents, {[], in_degree}, fn dep, {queue_acc, deg_acc} ->
+        new_deg = Map.get(deg_acc, dep, 0) - 1
+        deg_acc = Map.put(deg_acc, dep, new_deg)
+
+        if new_deg == 0 do
+          {[dep | queue_acc], deg_acc}
+        else
+          {queue_acc, deg_acc}
+        end
+      end)
+
+    process_queue(rest ++ new_queue_additions, adj, new_in_degree, count + 1)
+  end
+
+  # --- Soft Warning Collection ---
+
+  defp collect_warnings(%Config{teams: teams}) do
+    Enum.flat_map(teams, fn team ->
+      member_warnings(team) ++ task_warnings(team)
+    end)
+  end
+
+  defp member_warnings(team) do
+    if length(team.members) > 5 do
+      ["team '#{team.name}' has #{length(team.members)} members (consider splitting)"]
+    else
+      []
+    end
+  end
+
+  defp task_warnings(team) do
+    Enum.flat_map(team.tasks, fn task ->
+      details_warning =
+        if is_nil(task.details) or (is_binary(task.details) and String.trim(task.details) == "") do
+          ["team '#{team.name}' task '#{task.summary}' has empty details"]
+        else
+          []
+        end
+
+      verify_warning =
+        if is_nil(task.verify) or (is_binary(task.verify) and String.trim(task.verify) == "") do
+          ["team '#{team.name}' task '#{task.summary}' has empty verify"]
+        else
+          []
+        end
+
+      details_warning ++ verify_warning
+    end)
+  end
+end
