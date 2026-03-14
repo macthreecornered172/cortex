@@ -1,0 +1,133 @@
+phase: "LiveView Dashboard QE"
+
+goal: >
+  Validate the LiveView dashboard — mount tests, navigation, real-time updates,
+  persistence roundtrips, DAG rendering correctness, and UI edge cases.
+
+system_context: |
+  ## Project: Cortex
+  Phase 5 built the LiveView dashboard: Phoenix setup, DAG visualization,
+  run management pages, and Ecto + SQLite persistence.
+
+  ## What This Phase Validates
+  1. LiveView — pages mount, render correctly, handle events
+  2. Real-time — PubSub events update the UI without page reload
+  3. Persistence — Ecto schemas, Store context functions, data integrity
+  4. DAG rendering — correct node positions, edges, status colors
+  5. Edge cases — empty runs, failed teams, missing data, concurrent updates
+
+  ## Testing Approach
+  - Use `Phoenix.LiveViewTest` for LiveView integration tests
+  - Use `Ecto.Adapters.SQL.Sandbox` for database tests
+  - Mock the orchestration runner for UI tests (don't spawn real claude processes)
+  - Test PubSub-driven updates by broadcasting events in tests
+
+dependencies:
+  - PROJECT.md
+  - docs/01-otp-foundation/kickoff.yaml
+  - docs/03-dag-orchestration/kickoff.yaml
+  - docs/05-liveview-dashboard/kickoff.yaml
+
+plans_dir: docs/06-liveview-dashboard-qe/plans
+content_dir: docs/06-liveview-dashboard-qe/content
+
+teammates:
+  - role: "LiveView QE"
+    doc: liveview-qe.md
+    focus: |
+      Tests for all LiveView pages — mounting, rendering, navigation, event handling.
+
+      Files to create:
+      - `test/cortex_web/live/dashboard_live_test.exs` — Dashboard tests:
+        - Page mounts and renders
+        - Shows recent runs (when runs exist)
+        - Shows empty state (when no runs)
+        - New run button navigates to /new
+        - Run click navigates to /runs/:id
+        - Real-time update: broadcast :run_completed → run status updates in UI
+
+      - `test/cortex_web/live/run_list_live_test.exs` — Run list tests:
+        - Page mounts with paginated runs
+        - Sorting by status, cost, duration works
+        - Empty state renders correctly
+        - Run row is clickable → navigates to detail
+
+      - `test/cortex_web/live/run_detail_live_test.exs` — Run detail tests:
+        - Page mounts and shows DAG
+        - DAG has correct number of nodes and edges
+        - Team nodes show correct status colors
+        - Real-time: broadcast :team_completed → node color changes
+        - Real-time: broadcast :tier_completed → progress bar advances
+        - Team card click navigates to team detail
+        - Non-existent run_id → 404
+
+      - `test/cortex_web/live/new_run_live_test.exs` — New run tests:
+        - Page mounts with empty textarea
+        - Paste valid YAML → validate → shows preview
+        - Paste invalid YAML → validate → shows errors
+        - Launch starts a run and redirects to detail page
+
+      - `test/cortex_web/live/team_detail_live_test.exs` — Team detail tests:
+        - Page mounts and shows team info
+        - Result tab shows output
+        - Log tab shows log content
+        - Config tab shows team config
+        - Prompt tab shows full prompt
+
+  - role: "Persistence QE"
+    doc: persistence-qe.md
+    focus: |
+      Tests for Ecto schemas, Store context, and data integrity.
+
+      Files to create:
+      - `test/cortex/store_test.exs` — Store context tests:
+        - create_run with valid attrs → {:ok, run}
+        - create_run with missing name → {:error, changeset}
+        - update_run changes fields correctly
+        - get_run retrieves by id
+        - list_runs returns paginated results
+        - list_runs sorts by started_at descending by default
+        - create_team_run with valid attrs → {:ok, team_run}
+        - get_team_runs returns all teams for a run
+        - log_event persists event
+        - recent_events returns last N events for a run
+
+      - `test/cortex/store/event_sink_test.exs` — Event sink tests:
+        - Broadcast event → event persisted to database
+        - Multiple events batched (not one write per event)
+        - Event sink handles high volume without dropping
+
+      - `test/cortex/store/schemas/run_test.exs` — Run schema tests:
+        - Valid changeset with all fields
+        - Required field validation
+        - Status enum validation
+
+      - `test/cortex/store/schemas/team_run_test.exs` — TeamRun schema tests:
+        - Valid changeset
+        - run_id association
+        - Required fields
+
+  - role: "Visual QE"
+    doc: visual-qe.md
+    focus: |
+      Tests for DAG rendering correctness and component behavior.
+
+      Files to create:
+      - `test/cortex_web/components/dag_components_test.exs` — DAG component tests:
+        - team_node renders correct SVG rect with team name
+        - team_node applies correct color class for each status
+        - dependency_edge renders SVG line between correct coordinates
+        - dag_graph renders all nodes and edges for a given DAG
+
+      - `test/cortex_web/live/helpers/dag_layout_test.exs` — Layout tests:
+        - Single tier: all nodes in column 0
+        - Two tiers: tier 0 in column 0, tier 1 in column 1
+        - Multiple teams in tier: evenly spaced vertically
+        - Diamond DAG: correct layout positions
+        - Large DAG (10+ teams): no overlapping nodes
+
+      - `test/cortex_web/components/core_components_test.exs` — Component tests:
+        - stat_card renders label and value
+        - status_badge shows correct text and color for each status
+        - cost_display formats dollars correctly ($1.20, $0.05, $12.34)
+        - duration_display formats time correctly (0m 05s, 4m 12s, 1h 03m)

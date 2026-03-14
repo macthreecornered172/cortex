@@ -1,0 +1,192 @@
+phase: "Gossip + Advanced"
+
+goal: >
+  Build the second coordination mode — gossip-based emergent exploration. Agents
+  form a peer-to-peer mesh, exchange knowledge via gossip protocol, merge state
+  using CRDTs, and self-organize. Also add multi-node distribution via BEAM clustering.
+
+system_context: |
+  ## Project: Cortex
+  Cortex is a multi-agent orchestration system built on Elixir/OTP. The primary mode
+  (DAG orchestration) is built and validated. This phase adds the secondary mode:
+  gossip-based emergent coordination for exploration and research tasks.
+
+  ## What This Phase Builds
+  1. **Gossip Protocol** — push-pull exchange between peer agents
+  2. **Knowledge Store** — CRDT-based data structure for conflict-free merging
+  3. **Network Topology** — peer graph management with multiple strategies
+  4. **Distribution** — multi-node BEAM clustering for scaling across machines
+
+  ## When to Use Gossip vs DAG
+  - **DAG**: "Build this app" — known plan, defined teams, clear dependencies
+  - **Gossip**: "Research this market" — multiple agents exploring different angles,
+    sharing findings organically, building collective knowledge
+
+  ## Gossip Protocol Design (Push-Pull)
+  1. Initiator sends digest (list of {entry_id, vector_clock} pairs)
+  2. Responder compares with own knowledge:
+     - Entries initiator has but responder doesn't → responder requests full entries
+     - Entries responder has but initiator doesn't → responder sends full entries
+     - Both have → compare vector clocks, send newer version
+  3. Both sides merge received entries into their knowledge store
+
+  ## Knowledge Store (CRDT)
+  Each agent maintains a knowledge store — a map of topic → knowledge entries.
+  Uses vector clocks for causality tracking and conflict resolution.
+
+  A knowledge entry:
+  ```elixir
+  %Cortex.Knowledge.Entry{
+    id: "uuid",
+    topic: "market_research",
+    content: "Finding about the market...",
+    source: :agent_id,
+    confidence: 0.85,
+    timestamp: ~U[2026-03-14 10:00:00Z],
+    vector_clock: %{"agent_a" => 3, "agent_b" => 1}
+  }
+  ```
+
+  ## Topology Strategies
+  - Random: each agent gets K random peers (simple, good enough for small networks)
+  - Adaptive: track gossip utility per peer, drop low-value, add high-value
+  - Small-world: Watts-Strogatz model, short paths + high clustering
+
+  ## Architecture Integration
+  Gossip modules live under `Cortex.Gossip.*` and `Cortex.Knowledge.*`.
+  They use the same Agent GenServer from Phase 1 — gossip state is stored in
+  the agent's metadata map. The agent gets a gossip timer that fires periodically
+  to trigger exchange cycles.
+
+  ## Coding Conventions (same as prior phases)
+  - Module naming: `Cortex.<Component>.<Module>`
+  - Typespecs on all public functions
+  - Pattern match in function heads
+  - `defstruct` with `@enforce_keys`
+
+dependencies:
+  - PROJECT.md
+  - docs/01-otp-foundation/kickoff.yaml
+  - docs/03-dag-orchestration/kickoff.yaml
+
+plans_dir: docs/07-gossip-advanced/plans
+content_dir: docs/07-gossip-advanced/content
+
+teammates:
+  - role: "Gossip Protocol Lead"
+    doc: gossip-protocol.md
+    focus: |
+      Implement the gossip protocol — the mechanism by which agents exchange knowledge.
+
+      Files to create:
+      - `lib/cortex/gossip/protocol.ex` — The exchange logic.
+        `exchange(initiator_pid, responder_pid)` — full push-pull gossip cycle:
+        1. Get digest from initiator (list of {entry_id, vector_clock})
+        2. Send digest to responder via GenServer.call
+        3. Responder compares, returns {entries_for_initiator, entry_ids_it_needs}
+        4. Initiator sends requested entries to responder
+        5. Both sides merge received entries
+        Returns {:ok, stats} with entries_sent, entries_received, duration_us.
+
+      - `lib/cortex/gossip/digest.ex` — Digest generation and comparison.
+        `build(knowledge_store)` — returns list of {entry_id, vector_clock} pairs.
+        `diff(local_digest, remote_digest)` — returns {need_from_remote, have_for_remote}.
+
+      - `lib/cortex/gossip/peer_selection.ex` — Peer selection strategies.
+        `select_peer(peer_ids, strategy \\ :random)` — picks a peer for gossip.
+        Strategies: :random, :round_robin, :least_recently_gossiped.
+
+      - `lib/cortex/gossip/timer.ex` — Gossip timer management.
+        Functions to start/stop/reset the periodic gossip cycle on an agent.
+        Default interval: 5000ms. Sends :gossip_tick to the agent GenServer.
+
+      Modify `lib/cortex/agent/server.ex` to add:
+      - `handle_info(:gossip_tick, state)` — select peer, call Protocol.exchange
+      - `handle_call(:get_digest, ...)` — return knowledge digest
+      - `handle_call({:receive_entries, entries}, ...)` — merge incoming knowledge
+      - Optional gossip mode flag in agent config (agents can be gossip-enabled or not)
+
+  - role: "Knowledge Store Lead"
+    doc: knowledge-store.md
+    focus: |
+      Build the CRDT-based knowledge store for conflict-free knowledge merging.
+
+      Files to create:
+      - `lib/cortex/knowledge/entry.ex` — Knowledge entry struct.
+        Fields: id (uuid), topic (string), content (string), source (agent_id),
+        confidence (float 0-1), timestamp (DateTime), vector_clock (map),
+        metadata (map). `@enforce_keys [:id, :topic, :content, :source]`.
+
+      - `lib/cortex/knowledge/store.ex` — The CRDT knowledge store.
+        Wraps a map of entry_id → entry. Operations:
+        `new()` — empty store.
+        `put(store, entry)` — add/update, incrementing vector clock for source.
+        `get(store, entry_id)` — retrieve entry.
+        `topics(store)` — list all topics.
+        `by_topic(store, topic)` — entries for a topic.
+        `merge(store_a, store_b)` — CRDT merge:
+          - Only in one → include it
+          - In both → compare vector clocks
+            - One dominates → take it
+            - Concurrent → tiebreak by higher confidence, then latest timestamp
+        `digest(store)` — list of {entry_id, vector_clock} for gossip.
+        `entries_for_ids(store, ids)` — bulk retrieve.
+        `size(store)` — entry count.
+
+      - `lib/cortex/knowledge/vector_clock.ex` — Vector clock operations.
+        `new()`, `increment(vc, node_id)`, `merge(vc_a, vc_b)`,
+        `compare(vc_a, vc_b)` → :before | :after | :concurrent | :equal,
+        `dominates?(vc_a, vc_b)` → boolean.
+
+  - role: "Topology Lead"
+    doc: topology.md
+    focus: |
+      Build network topology management — peer graph and topology strategies.
+
+      Files to create:
+      - `lib/cortex/network/topology.ex` — GenServer managing the peer graph.
+        State: adjacency map (agent_id → MapSet of peer_ids), strategy module.
+        `add_agent(agent_id)` — add to graph, assign peers via strategy.
+        `remove_agent(agent_id)` — remove from graph, clean up peer references.
+        `peers_for(agent_id)` — get peer list.
+        `set_peers(agent_id, peer_ids)` — manually set peers.
+        `rebalance(agent_id)` — trigger strategy rebalance.
+        Subscribes to PubSub for agent_started/agent_stopped events.
+
+      - `lib/cortex/network/topology/strategy.ex` — Behaviour for topology strategies.
+        `assign_peers(agent_id, all_agents, opts)` — initial peer assignment.
+        `rebalance(agent_id, current_peers, stats, all_agents)` — periodic reassessment.
+
+      - `lib/cortex/network/topology/random.ex` — Random strategy.
+        Assigns K random peers on join (default K=3). No rebalancing.
+
+      - `lib/cortex/network/topology/adaptive.ex` — Adaptive strategy.
+        Tracks gossip utility per peer. On rebalance: drop lowest utility,
+        80% chance pick from friends-of-friends, 20% random.
+
+      - `lib/cortex/network/stats.ex` — Per-peer gossip statistics.
+        Track: exchanges_count, useful_entries_received, last_exchange_at.
+
+  - role: "Distribution Lead"
+    doc: distribution.md
+    focus: |
+      Enable Cortex to run across multiple BEAM nodes with transparent gossip.
+
+      Files to create:
+      - `lib/cortex/cluster/manager.ex` — GenServer managing cluster state.
+        Uses `libcluster` for automatic node discovery.
+        Tracks which agents are on which nodes.
+        Publishes :node_joined and :node_left events.
+
+      - `lib/cortex/cluster/registry.ex` — Cluster-wide agent registry.
+        Wraps `:pg` (process groups) for cross-node agent discovery.
+        `register(agent_id, pid)`, `lookup(agent_id)`, `all()`, `on_node(node)`.
+
+      - `lib/cortex/cluster/topology_sync.ex` — Synchronizes topology across nodes.
+        New node joins → existing topology shared. Agent starts → all nodes learn.
+
+      - Modify `lib/cortex/network/topology.ex` to support cluster registry.
+      - Modify `lib/cortex/gossip/protocol.ex` to add node affinity option.
+
+      Update `mix.exs`: add `{:libcluster, "~> 3.3"}`.
+      Add `config/runtime.exs` with cluster topology config.

@@ -1,0 +1,134 @@
+phase: "Gossip + Advanced QE"
+
+goal: >
+  Validate the gossip coordination mode — convergence guarantees, CRDT merge
+  correctness, topology management, and cross-node distribution.
+
+system_context: |
+  ## Project: Cortex
+  Phase 7 built the gossip coordination mode: gossip protocol (push-pull exchange),
+  CRDT knowledge store, network topology management (random, adaptive strategies),
+  and multi-node distribution via BEAM clustering.
+
+  ## What This Phase Validates
+  1. Gossip convergence — knowledge propagates to all agents within bounded time
+  2. CRDT correctness — merges are commutative, associative, idempotent
+  3. Topology — peer assignment, removal, rebalancing works correctly
+  4. Distribution — cross-node gossip, node join/leave, agent discovery
+  5. Integration — gossip mode works alongside DAG mode without interference
+
+  ## Key Properties to Verify
+  - **Convergence**: All agents eventually hold the same knowledge given enough cycles
+  - **Commutativity**: merge(A, B) == merge(B, A)
+  - **Associativity**: merge(merge(A, B), C) == merge(A, merge(B, C))
+  - **Idempotency**: merge(A, A) == A
+  - **Consistency**: vector clock ordering is respected during merge
+  - **Partition tolerance**: agents catch up after network partition heals
+
+dependencies:
+  - PROJECT.md
+  - docs/01-otp-foundation/kickoff.yaml
+  - docs/07-gossip-advanced/kickoff.yaml
+
+plans_dir: docs/08-gossip-advanced-qe/plans
+content_dir: docs/08-gossip-advanced-qe/content
+
+teammates:
+  - role: "Gossip QE"
+    doc: gossip-qe.md
+    focus: |
+      Tests for gossip protocol correctness and convergence.
+
+      Files to create:
+      - `test/cortex/gossip/protocol_test.exs` — Protocol tests:
+        - Two agents with disjoint knowledge → after exchange, both have all entries
+        - Two agents with overlapping knowledge → merge correctly, no duplicates
+        - Two agents with conflicting versions → vector clock determines winner
+        - Exchange returns correct stats (entries_sent, entries_received)
+        - Exchange with empty knowledge store → one-way transfer
+        - Exchange with identical knowledge → no entries transferred
+
+      - `test/cortex/gossip/convergence_test.exs` — Convergence tests:
+        - 5 agents in ring topology, inject knowledge at one → all 5 have it within N cycles
+        - 10 agents, inject different knowledge at 3 → all converge
+        - Knowledge injected during ongoing gossip still converges
+        - Measure convergence time vs network size (informational, not a pass/fail)
+
+      - `test/cortex/gossip/digest_test.exs` — Digest tests:
+        - Build digest from empty store → empty list
+        - Build digest from store with entries → correct {id, vc} pairs
+        - Diff with disjoint digests → correct needs and haves
+        - Diff with identical digests → empty needs and haves
+        - Diff with partial overlap → correct delta
+
+      - `test/cortex/gossip/peer_selection_test.exs` — Peer selection tests:
+        - Random selection picks from available peers
+        - Round robin cycles through all peers
+        - Selection from empty peer list returns :no_peers
+
+  - role: "CRDT QE"
+    doc: crdt-qe.md
+    focus: |
+      Tests for CRDT knowledge store and vector clock correctness.
+
+      Files to create:
+      - `test/cortex/knowledge/store_test.exs` — Store tests:
+        - put and get roundtrip
+        - put increments vector clock for source agent
+        - topics returns all unique topics
+        - by_topic filters correctly
+        - merge with disjoint entries → union
+        - merge with same entry, one dominates → winner kept
+        - merge with concurrent entries → tiebreak by confidence then timestamp
+        - merge is commutative: merge(A, B) == merge(B, A)
+        - merge is associative: merge(merge(A, B), C) == merge(A, merge(B, C))
+        - merge is idempotent: merge(A, A) == A
+        - digest returns correct {id, vc} pairs
+        - entries_for_ids returns correct subset
+        - size returns correct count
+
+      - `test/cortex/knowledge/vector_clock_test.exs` — Vector clock tests:
+        - new returns empty map
+        - increment adds/bumps node counter
+        - compare: equal clocks → :equal
+        - compare: a dominates b → :after
+        - compare: b dominates a → :before
+        - compare: concurrent (neither dominates) → :concurrent
+        - merge takes max of each component
+        - dominates? returns correct boolean
+
+      - `test/cortex/knowledge/entry_test.exs` — Entry tests:
+        - Struct creation with enforce_keys
+        - Missing required key raises
+        - Default values for optional fields
+
+  - role: "Distribution QE"
+    doc: distribution-qe.md
+    focus: |
+      Tests for multi-node clustering and cross-node gossip.
+
+      Files to create:
+      - `test/cortex/cluster/manager_test.exs` — Cluster manager tests:
+        - Start manager → registers with libcluster
+        - Node join event → :node_joined broadcast
+        - Node leave event → :node_left broadcast
+        - Tracks agents per node correctly
+
+      - `test/cortex/cluster/registry_test.exs` — Cluster registry tests:
+        - Register agent → discoverable via lookup
+        - Lookup across nodes returns correct pid
+        - all() returns agents from all nodes
+        - on_node(node) filters correctly
+        - Agent deregistered on process death
+
+      - `test/cortex/gossip/distributed_test.exs` — Cross-node gossip tests:
+        (Tag @tag :distributed — requires multi-node test setup)
+        - Start 2 local nodes, agent on each → gossip exchange works
+        - Knowledge injected on node A → propagates to agent on node B
+        - Node disconnect → agents continue locally → reconnect → catch up
+        - Topology sync: new node gets existing topology info
+
+      - `test/cortex/integration/dual_mode_test.exs` — Dual mode tests:
+        - DAG orchestration and gossip agents can run simultaneously
+        - PubSub events from both modes don't interfere
+        - Shared Agent.Supervisor handles both mode's agents

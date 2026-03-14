@@ -1,0 +1,158 @@
+phase: "OTP Foundation QE"
+
+goal: >
+  Validate everything built in Phase 1. Comprehensive unit tests, integration tests,
+  fault injection, supervision recovery verification, and LLM client edge cases.
+  Nothing moves forward until the foundation is solid.
+
+system_context: |
+  ## Project: Cortex
+  Cortex is a multi-agent orchestration system built on Elixir/OTP. Phase 1 built the
+  OTP foundation: Agent GenServer, supervision tree, LLM client, tool runtime, events.
+
+  ## What This Phase Validates
+  Every component from Phase 1 gets thorough testing:
+  1. Agent lifecycle — start, stop, state inspection, status transitions
+  2. Supervision — agent crashes restart correctly, supervisor recovers
+  3. LLM Client — Claude adapter with mocked HTTP, rate limiter under load
+  4. Tool Runtime — execution, timeouts, crash isolation
+  5. Integration — full lifecycle flows across components
+
+  ## Architecture (from Phase 1)
+  ```
+  Cortex.Application
+  ├── Cortex.Agent.Supervisor (DynamicSupervisor)
+  ├── Cortex.Agent.Registry (Registry)
+  ├── Cortex.LLM.RateLimiter (GenServer)
+  ├── Cortex.Tool.Supervisor (Task.Supervisor)
+  └── Cortex.Events.PubSub (Phoenix.PubSub)
+  ```
+
+  ## Testing Conventions
+  - Tests in `test/cortex/<component>/` mirroring `lib/` structure
+  - Use `ExUnit.Case, async: true` where safe (no shared state)
+  - Use `async: false` for tests touching GenServers or shared state
+  - Use Mox for LLM client mocking — define `Cortex.LLM.ClientMock`
+  - Use `ExUnit.CaptureLog` for verifying log output
+  - Tag slow/integration tests with `@tag :integration`
+  - Every test should be deterministic — no flaky tests
+  - Test names should describe the behavior being verified
+
+dependencies:
+  - PROJECT.md
+  - docs/01-otp-foundation/kickoff.yaml
+
+plans_dir: docs/02-otp-foundation-qe/plans
+content_dir: docs/02-otp-foundation-qe/content
+
+teammates:
+  - role: "Agent Core QE"
+    doc: agent-core-qe.md
+    focus: |
+      Comprehensive tests for the Agent GenServer lifecycle and state management.
+
+      Files to create:
+      - `test/cortex/agent/server_test.exs` — Agent lifecycle tests:
+        - Starting an agent returns {:ok, pid} and registers in Registry
+        - Starting an agent broadcasts :agent_started event
+        - Stopping an agent broadcasts :agent_stopped event
+        - get_state returns correct initial state
+        - update_status transitions correctly (:idle → :running → :done)
+        - update_status rejects invalid transitions (e.g., :done → :idle)
+        - update_metadata adds key-value pairs
+        - assign_work stores work in state
+        - Agent is findable via Registry after start
+        - Agent is removed from Registry after stop
+        - Multiple agents can run concurrently with unique ids
+
+      - `test/cortex/agent/config_test.exs` — Config validation tests:
+        - Valid config passes validation
+        - Missing name raises error
+        - Missing role raises error
+        - Default values applied correctly (model, max_turns, timeout)
+
+      - `test/cortex/agent/supervisor_test.exs` — Supervisor tests:
+        - start_agent starts a child process
+        - stop_agent terminates the child
+        - list_agents returns all running agents
+        - Crashed agent is restarted by supervisor
+        - Restarted agent gets a new pid but same config
+
+  - role: "LLM Client QE"
+    doc: llm-client-qe.md
+    focus: |
+      Tests for the LLM client behaviour, Claude adapter, and rate limiter.
+
+      Files to create:
+      - `test/support/mocks.ex` — Mox mock definitions.
+        Define `Cortex.LLM.ClientMock` for the `Cortex.LLM.Client` behaviour.
+
+      - `test/cortex/llm/claude_test.exs` — Claude adapter tests (mocked HTTP):
+        - Successful chat returns parsed response
+        - Handles 429 rate limit errors with retry
+        - Handles 500 server errors with retry
+        - Handles timeout errors
+        - Handles malformed JSON response
+        - Handles missing API key
+        - Request includes correct headers (x-api-key, anthropic-version, content-type)
+        - Correct request body format (model, messages, max_tokens)
+        - Respects temperature and system prompt options
+        - One @tag :integration test hitting real Claude API with "say hello"
+
+      - `test/cortex/llm/rate_limiter_test.exs` — Rate limiter tests:
+        - Single request within limits passes immediately
+        - Rapid requests beyond limit get throttled
+        - Capacity replenishes after time window
+        - Token-based limiting works (large request blocks)
+        - Concurrent callers are serialized correctly
+
+      - `test/cortex/llm/response_test.exs` — Response struct tests:
+        - Struct creation with all fields
+        - Default values for optional fields
+
+  - role: "Tool Runtime QE"
+    doc: tool-runtime-qe.md
+    focus: |
+      Tests for tool execution, sandboxing, timeouts, and crash isolation.
+
+      Files to create:
+      - `test/support/test_tools.ex` — Test tool modules implementing the behaviour.
+        `Cortex.TestTools.Echo` — returns its args as result.
+        `Cortex.TestTools.Slow` — sleeps for a configurable duration.
+        `Cortex.TestTools.Crasher` — raises an exception.
+        `Cortex.TestTools.BadReturn` — returns an invalid format.
+
+      - `test/cortex/tool/executor_test.exs` — Executor tests:
+        - Successful execution returns {:ok, result}
+        - Timeout returns {:error, :timeout} and doesn't leak processes
+        - Crashed tool returns {:error, reason} without crashing caller
+        - Bad return value is handled gracefully
+        - Concurrent tool executions work independently
+        - Tool runs in a separate process (verify via self() comparison)
+
+      - `test/cortex/tool/registry_test.exs` — Registry tests:
+        - Register and lookup tool by name
+        - Lookup non-existent tool returns :not_found
+        - List returns all registered tools
+        - Duplicate registration updates (or errors — pick a semantic)
+
+  - role: "Integration QE"
+    doc: integration-qe.md
+    focus: |
+      Cross-component integration tests verifying the full system works together.
+
+      Files to create:
+      - `test/cortex/integration_test.exs` — Full lifecycle integration tests:
+        - Start application → start 3 agents → verify all registered → stop all → verify cleanup
+        - PubSub events flow correctly: start agent → subscriber receives :agent_started
+        - Agent status update → PubSub event → subscriber receives :agent_updated
+        - Supervisor crash recovery: start agent → kill process → verify restart → state reset
+        - Multiple supervisors don't interfere: agent supervisor + tool supervisor independent
+        - Rate limiter shared across agents: two agents making LLM calls share the same limiter
+
+      - `test/cortex/events_test.exs` — Event system tests:
+        - broadcast sends to all subscribers
+        - subscribe receives events
+        - Multiple subscribers each receive events
+        - Unsubscribed process doesn't receive events
+        - Events include correct type and payload

@@ -1,0 +1,385 @@
+phase: "DAG Orchestration"
+
+goal: >
+  Build the primary orchestration capability — YAML config parsing, DAG engine,
+  prompt injection, claude -p spawner, workspace state management, and the
+  orchestration loop that ties it all together. After this phase, Cortex can
+  execute multi-team projects end-to-end.
+
+system_context: |
+  ## Project: Cortex
+  Cortex is a multi-agent orchestration system built on Elixir/OTP. Phase 1 built the
+  OTP foundation (Agent GenServer, supervision, LLM client, tool runtime, events).
+  Phase 2 validated it with comprehensive tests.
+
+  ## What This Phase Builds
+  The DAG orchestration engine — the primary way Cortex executes work:
+
+  1. **Config** — Parse orchestra.yaml defining teams, tasks, dependencies
+  2. **DAG Engine** — Kahn's algorithm produces execution tiers from dependencies
+  3. **Prompt Injection** — Build rich prompts for each team with role, context, tasks, upstream results
+  4. **Spawner** — Spawn `claude -p --output-format stream-json` processes, parse NDJSON output
+  5. **Workspace** — Directory structure for run state, results, logs (atomic writes)
+  6. **Orchestration Loop** — Init → DAG → tier-by-tier spawn → collect → summary
+
+  ## How It Works
+  ```
+  orchestra.yaml
+       │
+       ▼
+  Config.load() → Config.validate()
+       │
+       ▼
+  DAG.build_tiers(teams) → [[:backend], [:frontend, :devops], [:integration]]
+       │
+       ▼
+  For each tier:
+    ├── Read current state (results from prior tiers)
+    ├── For each team in tier (parallel):
+    │   ├── Injection.build_prompt(team, state)
+    │   ├── Spawner.spawn(prompt, opts)  ← runs claude -p
+    │   └── Capture result (JSON from stream-json)
+    ├── Update workspace state with results
+    └── Next tier (or fail if any team failed)
+       │
+       ▼
+  Print summary (costs, durations, status per team)
+  ```
+
+  ## Config Format (orchestra.yaml)
+  ```yaml
+  name: "my-project"
+  defaults:
+    model: sonnet
+    max_turns: 200
+    permission_mode: acceptEdits
+    timeout_minutes: 45
+  teams:
+    - name: backend
+      lead:
+        role: "Backend Lead"
+        model: opus
+      context: |
+        Tech stack: Go, Chi router, Postgres...
+      members:
+        - role: "API Engineer"
+          focus: "REST endpoints, validation"
+      tasks:
+        - summary: "Build REST API"
+          details: "Create endpoints for..."
+          deliverables: ["src/api/"]
+          verify: "go build ./..."
+      depends_on: []
+  ```
+
+  ## Architecture (after Phase 1)
+  ```
+  Cortex.Application
+  ├── Cortex.Agent.Supervisor (DynamicSupervisor)
+  ├── Cortex.Agent.Registry (Registry)
+  ├── Cortex.LLM.RateLimiter (GenServer)
+  ├── Cortex.Tool.Supervisor (Task.Supervisor)
+  └── Cortex.Events.PubSub (Phoenix.PubSub)
+  ```
+
+  This phase adds orchestration modules under `Cortex.Orchestration.*` — they use
+  the Agent infrastructure from Phase 1 but add the DAG-specific logic on top.
+
+  ## Spawner Design
+  The spawner runs `claude -p` as an external process:
+  ```
+  claude -p <prompt> --output-format stream-json --model <model> --max-turns <N> --permission-mode <mode>
+  ```
+  It streams NDJSON lines. The final line is always:
+  ```json
+  {"type": "result", "subtype": "success", "result": "...", "cost_usd": 0.45, "duration_ms": 120000}
+  ```
+  The spawner blocks until the process exits, captures the result, and returns a struct.
+
+  ## Workspace Layout
+  ```
+  .cortex/
+  ├── state.json        # shared state — per-team status and result summaries
+  ├── registry.json     # all teams: name, status, pid, timestamps
+  ├── results/
+  │   └── <team>.json   # full result per team
+  └── logs/
+      └── <team>.log    # raw claude -p stdout
+  ```
+  All writes use atomic pattern: write .tmp → os.rename (or File.rename in Elixir).
+
+  ## Coding Conventions (same as Phase 1)
+  - Module naming: `Cortex.<Component>.<Module>`
+  - Typespecs on all public functions
+  - Pattern match in function heads
+  - `defstruct` with `@enforce_keys`
+  - Tests mirroring lib structure
+
+dependencies:
+  - PROJECT.md
+  - docs/01-otp-foundation/kickoff.yaml
+
+plans_dir: docs/03-dag-orchestration/plans
+content_dir: docs/03-dag-orchestration/content
+
+teammates:
+  - role: "Config Lead"
+    doc: config.md
+    focus: |
+      Build the YAML config parser and validator for orchestra project definitions.
+
+      Files to create:
+      - `lib/cortex/orchestration/config/schema.ex` — Config structs.
+        ```elixir
+        defmodule Cortex.Orchestration.Config.Schema do
+          defmodule Config do
+            defstruct [:name, :defaults, :teams]
+          end
+          defmodule Defaults do
+            defstruct model: "sonnet", max_turns: 200,
+                      permission_mode: "acceptEdits", timeout_minutes: 30
+          end
+          defmodule Team do
+            defstruct [:name, :lead, :members, :tasks, :depends_on, :context]
+          end
+          defmodule Lead do
+            defstruct [:role, :model]
+          end
+          defmodule Member do
+            defstruct [:role, :focus]
+          end
+          defmodule Task do
+            defstruct [:summary, :details, :deliverables, :verify]
+          end
+        end
+        ```
+
+      - `lib/cortex/orchestration/config/loader.ex` — YAML loading.
+        `load(path)` — reads YAML file, parses into Config structs, calls validate.
+        `load_string(yaml_string)` — same but from a string (useful for tests).
+        Uses `YamlElixir` for parsing.
+
+      - `lib/cortex/orchestration/config/validator.ex` — Validation.
+        Hard errors (block execution):
+        - Non-empty name, non-empty teams, unique team names
+        - Each team has a lead with a role
+        - Each team has at least one task with non-empty summary
+        - depends_on references exist, no self-references, no cycles
+        Soft warnings (print but don't block):
+        - Team with > 5 members
+        - Task ratio outside [2, 8] tasks per member
+        - Task with empty details or empty verify
+        Returns `{:ok, config}` or `{:error, errors}` for hard errors.
+        Warnings are returned as a list alongside the config.
+
+  - role: "DAG Engine Lead"
+    doc: dag-engine.md
+    focus: |
+      Build the DAG engine — topological sort producing execution tiers.
+
+      Files to create:
+      - `lib/cortex/orchestration/dag.ex` — DAG builder.
+        `build_tiers(teams)` — takes a list of Team structs, returns `{:ok, tiers}`
+        where tiers is a list of lists of team names: `[["backend"], ["frontend", "devops"], ["integration"]]`.
+        Uses Kahn's algorithm:
+        1. Build adjacency list + in-degree map from depends_on
+        2. Seed queue with teams where in-degree == 0
+        3. Each iteration: current queue = one tier, decrement dependents' in-degree
+        4. If processed < total → cycle error
+        Returns `{:error, :cycle}` if a cycle is detected.
+
+        `dependencies_for(team_name, teams)` — returns the list of team names
+        this team depends on (direct only).
+
+        `dependents_of(team_name, teams)` — returns teams that depend on this team.
+
+  - role: "Prompt Injection Lead"
+    doc: prompt-injection.md
+    focus: |
+      Build the prompt constructor that creates rich prompts for each team.
+
+      Files to create:
+      - `lib/cortex/orchestration/injection.ex` — Prompt builder.
+
+        `build_prompt(team, project_name, state, config)` — constructs the full
+        prompt for a team's claude -p session. The prompt structure differs based
+        on whether the team has members (team lead) or not (solo agent).
+
+        **Solo agent prompt** (no members):
+        ```
+        You are: {role}
+        Project: {project_name}
+
+        ## Technical Context
+        {team.context}
+
+        ## Your Tasks
+        {for each task: summary, details, deliverables, verify command}
+
+        ## Context from Previous Teams
+        {for each dependency: name, role, result_summary, artifacts}
+
+        ## Instructions
+        Work through tasks in order. Run verify commands after each.
+        Provide a summary of what you accomplished and files created/modified.
+        ```
+
+        **Team lead prompt** (has members):
+        Same as solo but adds a "Your Team" section with member roles/focuses,
+        and instructions to use TeamCreate to spawn teammates with full context.
+
+  - role: "Spawner Lead"
+    doc: spawner.md
+    focus: |
+      Build the spawner that runs claude -p processes and captures results.
+
+      Files to create:
+      - `lib/cortex/orchestration/spawner.ex` — Process spawner.
+        ```elixir
+        defmodule Cortex.Orchestration.Spawner do
+          defstruct [:team_name, :prompt, :model, :max_turns,
+                     :permission_mode, :timeout_minutes, :log_writer,
+                     :command]  # defaults to "claude", tests override
+
+          @spec spawn(opts :: t()) :: {:ok, TeamResult.t()} | {:error, term()}
+        end
+        ```
+
+        Internal flow:
+        1. Build args: ["-p", prompt, "--output-format", "stream-json",
+           "--model", model, "--max-turns", N, "--permission-mode", mode]
+        2. Start external process via `Port.open` or `System.cmd`
+        3. Read stdout line-by-line (NDJSON)
+        4. Tee all output to log_writer
+        5. Parse each JSON line:
+           - `type: "result"` → build TeamResult
+           - `type: "system", subtype: "init"` → capture session_id
+        6. Handle timeout (kill process after timeout_minutes)
+        7. Handle non-zero exit code → {:error, reason}
+
+      - `lib/cortex/orchestration/team_result.ex` — Result struct.
+        Fields: team (string), status ("success" | "error"), result (string),
+        cost_usd (float), num_turns (integer), duration_ms (integer),
+        session_id (string).
+
+  - role: "Workspace Lead"
+    doc: workspace.md
+    focus: |
+      Build the workspace — directory structure and state files for orchestration runs.
+
+      Files to create:
+      - `lib/cortex/orchestration/workspace.ex` — Workspace manager.
+        ```elixir
+        defmodule Cortex.Orchestration.Workspace do
+          defstruct [:path]
+
+          @spec init(config) :: {:ok, t()} | {:error, term()}
+          @spec open(path) :: {:ok, t()} | {:error, term()}
+        end
+        ```
+
+        `init(config)` — creates `.cortex/` directory with seeded state.json
+        and registry.json. Creates results/ and logs/ subdirs.
+
+        `open(path)` — opens existing workspace directory.
+
+        State operations (all use atomic writes — write .tmp then File.rename):
+        - `read_state(workspace)` → `{:ok, state}`
+        - `write_state(workspace, state)` → `:ok`
+        - `update_team_state(workspace, team_name, updates)` → `:ok`
+
+        Registry operations:
+        - `read_registry(workspace)` → `{:ok, registry}`
+        - `write_registry(workspace, registry)` → `:ok`
+        - `update_registry_entry(workspace, team_name, updates)` → `:ok`
+
+        Result operations:
+        - `write_result(workspace, team_result)` → `:ok`
+        - `read_result(workspace, team_name)` → `{:ok, result}`
+
+        Log operations:
+        - `log_path(workspace, team_name)` → path string
+        - `open_log(workspace, team_name)` → `{:ok, io_device}`
+
+      - `lib/cortex/orchestration/state.ex` — State struct.
+        ```elixir
+        defmodule Cortex.Orchestration.State do
+          defstruct [:project, teams: %{}]
+          # teams is map of team_name => TeamState
+        end
+
+        defmodule Cortex.Orchestration.TeamState do
+          defstruct [:status, :result_summary, :artifacts, :cost_usd, :duration_ms]
+          # status: "pending" | "running" | "done" | "failed"
+        end
+        ```
+
+      - `lib/cortex/orchestration/registry.ex` — Registry struct for run tracking.
+        ```elixir
+        defmodule Cortex.Orchestration.Registry do
+          defstruct [:project, teams: []]
+        end
+        defmodule Cortex.Orchestration.RegistryEntry do
+          defstruct [:name, :status, :session_id, :pid, :started_at, :ended_at]
+        end
+        ```
+
+      - `lib/cortex/orchestration/file_utils.ex` — Atomic file write helper.
+        `atomic_write(path, content)` — writes to path.tmp then File.rename.
+
+  - role: "Orchestration Loop Lead"
+    doc: orchestration-loop.md
+    focus: |
+      Build the main orchestration loop that ties everything together.
+
+      Files to create:
+      - `lib/cortex/orchestration/runner.ex` — The orchestration engine.
+        ```elixir
+        defmodule Cortex.Orchestration.Runner do
+          @spec run(config_path :: String.t(), opts :: keyword()) :: {:ok, summary} | {:error, term()}
+        end
+        ```
+
+        The `run/2` function:
+        1. Load and validate config
+        2. Init workspace
+        3. Build DAG tiers
+        4. Broadcast :run_started event
+        5. For each tier:
+           a. Broadcast :tier_started
+           b. Read current state
+           c. For each team in tier (spawn as concurrent Tasks):
+              - Start an Agent GenServer for the team
+              - Update registry → running
+              - Build prompt via Injection.build_prompt
+              - Open log file
+              - Spawn claude -p via Spawner
+              - Capture result
+              - Update workspace state + registry
+              - Stop agent
+           d. Wait for all teams in tier
+           e. If any failed and not continue_on_error → return error
+           f. Broadcast :tier_completed
+        6. Broadcast :run_completed
+        7. Return summary
+
+        Options:
+        - `continue_on_error: false` — stop on first failure (default)
+        - `dry_run: false` — just print the plan without executing
+        - `phase: nil` — run a specific phase/tier only
+
+      - `lib/cortex/orchestration/summary.ex` — Summary formatter.
+        `format(workspace)` — reads workspace state and produces a formatted
+        summary string showing: team statuses, costs, durations, total cost,
+        wall clock time.
+        ```
+        ═══════════════════════════════════════
+          Cortex: my-project — Complete
+        ═══════════════════════════════════════
+          Team        │ Status  │ Cost   │ Duration
+          ────────────┼─────────┼────────┼──────────
+          backend     │ success │ $1.20  │ 4m 12s
+          frontend    │ success │ $0.85  │ 3m 05s
+          ────────────┼─────────┼────────┼──────────
+          Total       │         │ $2.05  │ 7m 17s
+        ```

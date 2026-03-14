@@ -1,0 +1,184 @@
+phase: "DAG Orchestration QE"
+
+goal: >
+  Validate the DAG orchestration engine end-to-end. Config validation edge cases,
+  DAG correctness, spawner with mock claude scripts, full E2E orchestration runs,
+  and workspace state integrity under concurrent access.
+
+system_context: |
+  ## Project: Cortex
+  Cortex is a multi-agent orchestration system built on Elixir/OTP. Phase 3 built
+  the DAG orchestration engine: config parsing, DAG builder, prompt injection,
+  claude -p spawner, workspace state management, and the orchestration loop.
+
+  ## What This Phase Validates
+  1. Config — malformed YAML, missing fields, cycle detection, edge cases
+  2. DAG — linear chains, diamonds, parallel graphs, single team, empty
+  3. Spawner — mock claude script testing success, timeout, error, missing result
+  4. E2E — full orchestration runs with mock agents through multi-tier DAGs
+  5. State — concurrent writes, atomic integrity, workspace corruption scenarios
+
+  ## Mock Claude Script
+  For spawner and E2E tests, use a mock shell script instead of real `claude`:
+  ```bash
+  #!/bin/bash
+  # Mock claude that outputs stream-json format
+  echo '{"type":"system","subtype":"init","session_id":"test-123"}'
+  sleep 1
+  echo '{"type":"result","subtype":"success","result":"Mock completed","cost_usd":0.10,"num_turns":5,"duration_ms":1000,"session_id":"test-123"}'
+  ```
+  Place in `test/support/mock_claude.sh`. Spawner tests set `command: "test/support/mock_claude.sh"`.
+
+  ## Testing Conventions
+  - `async: true` for pure function tests (config validation, DAG, injection)
+  - `async: false` for spawner/E2E tests (file I/O, process spawning)
+  - Tag E2E tests with `@tag :e2e`
+  - Use `tmp_dir` ExUnit feature for workspace tests
+  - Clean up spawned processes in test on_exit callbacks
+
+dependencies:
+  - PROJECT.md
+  - docs/01-otp-foundation/kickoff.yaml
+  - docs/03-dag-orchestration/kickoff.yaml
+
+plans_dir: docs/04-dag-orchestration-qe/plans
+content_dir: docs/04-dag-orchestration-qe/content
+
+teammates:
+  - role: "Config QE"
+    doc: config-qe.md
+    focus: |
+      Comprehensive tests for config parsing and validation.
+
+      Files to create:
+      - `test/cortex/orchestration/config/loader_test.exs` — Loading tests:
+        - Valid YAML parses into correct structs
+        - Missing file returns {:error, :enoent}
+        - Invalid YAML returns parse error
+        - load_string works for inline YAML
+        - Defaults are applied when not specified
+        - Model override on lead takes precedence over defaults
+
+      - `test/cortex/orchestration/config/validator_test.exs` — Validation tests:
+        Hard errors:
+        - Empty name → error
+        - No teams → error
+        - Duplicate team names → error
+        - Team with no tasks → error
+        - Task with empty summary → error
+        - depends_on referencing non-existent team → error
+        - Self-referencing depends_on → error
+        - Circular dependency → error (A→B→C→A)
+        - Lead with no role → error
+        Soft warnings:
+        - Team with > 5 members → warning
+        - Task ratio outside [2, 8] → warning
+        - Task with empty details → warning
+        - Task with empty verify → warning
+        Valid:
+        - Minimal valid config (one team, one task)
+        - Complex valid config (4 teams, dependencies, members)
+        - Team with no members (solo agent) is valid
+        - Team with no depends_on (root team) is valid
+
+      - `test/support/fixtures/` — YAML fixture files:
+        `valid_simple.yaml`, `valid_complex.yaml`, `invalid_cycle.yaml`,
+        `invalid_missing_fields.yaml`, `warnings_only.yaml`
+
+  - role: "DAG QE"
+    doc: dag-qe.md
+    focus: |
+      Tests for DAG construction and tier extraction.
+
+      Files to create:
+      - `test/cortex/orchestration/dag_test.exs` — DAG tests:
+        - Linear chain: A→B→C = 3 tiers [[A], [B], [C]]
+        - Diamond: A→[B,C]→D = 3 tiers [[A], [B,C], [D]]
+        - Wide parallel: [A,B,C] no deps = 1 tier [[A,B,C]]
+        - Single team: [A] = 1 tier [[A]]
+        - Complex: A→B, A→C, B→D, C→D, D→E = [[A], [B,C], [D], [E]]
+        - Cycle detection: A→B→A returns {:error, :cycle}
+        - Longer cycle: A→B→C→A returns {:error, :cycle}
+        - dependencies_for returns correct direct dependencies
+        - dependents_of returns correct dependents
+        - Empty teams list returns empty tiers
+
+  - role: "Spawner QE"
+    doc: spawner-qe.md
+    focus: |
+      Tests for the claude -p spawner using mock scripts.
+
+      Files to create:
+      - `test/support/mock_claude.sh` — Mock success script.
+        Outputs stream-json init message, sleeps briefly, outputs result message.
+
+      - `test/support/mock_claude_fail.sh` — Mock failure script.
+        Exits with non-zero code and error output.
+
+      - `test/support/mock_claude_timeout.sh` — Mock timeout script.
+        Sleeps for 60 seconds (longer than test timeout).
+
+      - `test/support/mock_claude_no_result.sh` — Mock no-result script.
+        Outputs assistant messages but no result line, then exits 0.
+
+      - `test/cortex/orchestration/spawner_test.exs` — Spawner tests:
+        - Success: mock script returns valid result → {:ok, TeamResult}
+        - TeamResult has correct fields (cost, turns, duration, session_id)
+        - Failure: non-zero exit → {:error, reason}
+        - Timeout: slow script → process killed → {:error, :timeout}
+        - No result line but exit 0 → fallback to last assistant text
+        - Log output is written to log_writer
+        - Session ID captured from init message
+
+      - `test/cortex/orchestration/injection_test.exs` — Prompt injection tests:
+        - Solo agent prompt includes role, context, tasks, verify commands
+        - Solo agent with dependencies includes upstream results
+        - Team lead prompt includes member roles and TeamCreate instructions
+        - Team lead with dependencies includes both
+        - Context is injected verbatim
+        - Task details, deliverables, verify all appear in prompt
+
+  - role: "E2E QE"
+    doc: e2e-qe.md
+    focus: |
+      End-to-end orchestration tests using mock claude scripts.
+
+      Files to create:
+      - `test/cortex/orchestration/runner_test.exs` — E2E tests:
+        - Simple single-team run: one team, mock claude, completes successfully
+        - Two-tier run: A→B, both complete, B's prompt includes A's result
+        - Three-tier diamond: A→[B,C]→D, all complete in correct order
+        - Parallel tier: [A,B,C] all run concurrently (verify via timing)
+        - Team failure: team fails → run stops (continue_on_error: false)
+        - Team failure with continue: team fails → run continues (continue_on_error: true)
+        - Dry run: prints plan without spawning anything
+        - Workspace state is correct after run (all teams done, costs summed)
+        - Registry entries have correct timestamps and session IDs
+        - Result files exist for each completed team
+        - Log files exist for each spawned team
+        - Summary output includes correct cost totals
+
+  - role: "State QE"
+    doc: state-qe.md
+    focus: |
+      Tests for workspace state integrity and atomic file operations.
+
+      Files to create:
+      - `test/cortex/orchestration/workspace_test.exs` — Workspace tests:
+        - init creates correct directory structure
+        - init seeds state.json with all teams as "pending"
+        - init seeds registry.json with all team entries
+        - open on valid workspace returns {:ok, workspace}
+        - open on non-existent path returns {:error, :not_found}
+        - read_state/write_state roundtrip preserves data
+        - read_registry/write_registry roundtrip preserves data
+        - update_team_state modifies only the target team
+        - write_result creates correct file in results/
+        - read_result retrieves saved result
+        - Concurrent update_team_state calls don't lose data (race condition test)
+        - Atomic writes: crash mid-write doesn't corrupt state file
+
+      - `test/cortex/orchestration/file_utils_test.exs` — Atomic write tests:
+        - atomic_write creates the file with correct content
+        - atomic_write overwrites existing file
+        - No .tmp file remains after successful write

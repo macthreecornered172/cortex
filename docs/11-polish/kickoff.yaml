@@ -1,0 +1,193 @@
+phase: "Polish"
+
+goal: >
+  Final pass — comprehensive documentation, clean READMEs, modular readable code,
+  consistent style, and developer experience improvements. The codebase should be
+  something you're proud to share.
+
+system_context: |
+  ## Project: Cortex
+  Cortex is a multi-agent orchestration system built on Elixir/OTP. All functional,
+  performance, and observability phases are complete. This phase is about quality —
+  making the code clean, well-documented, and easy to onboard to.
+
+  ## What This Phase Does
+  1. **Documentation** — @moduledoc/@doc on every public module and function
+  2. **README** — comprehensive getting started, usage, configuration, architecture
+  3. **Code Quality** — Credo for linting, consistent style, dead code removal
+  4. **Developer Experience** — Mix tasks, aliases, seeds, dev setup scripts
+
+  ## Standards
+  - Every public module has a `@moduledoc` explaining what it does and when to use it
+  - Every public function has `@doc` with examples where appropriate
+  - Every public function has `@spec` typespec
+  - No compiler warnings
+  - Credo passes with zero issues on strict mode
+  - README covers: what it is, prerequisites, setup, usage, configuration, architecture, deployment
+  - Code is organized logically — related modules are in the same directory
+  - No dead code, no commented-out code, no TODO comments left behind
+  - Consistent naming: functions, modules, variables follow Elixir conventions
+  - Tests are well-named and organized
+
+dependencies:
+  - PROJECT.md
+  - docs/01-otp-foundation/kickoff.yaml
+  - docs/03-dag-orchestration/kickoff.yaml
+  - docs/05-liveview-dashboard/kickoff.yaml
+  - docs/07-gossip-advanced/kickoff.yaml
+  - docs/09-performance/kickoff.yaml
+  - docs/10-sre/kickoff.yaml
+
+plans_dir: docs/11-polish/plans
+content_dir: docs/11-polish/content
+
+teammates:
+  - role: "Documentation Lead"
+    doc: documentation.md
+    focus: |
+      Add comprehensive module and function documentation across the entire codebase.
+
+      Tasks:
+      - Audit every module in `lib/cortex/` and `lib/cortex_web/`:
+        - Every public module must have `@moduledoc` with:
+          - What the module does (1-2 sentences)
+          - When to use it
+          - Key functions
+          - Example usage where appropriate
+        - Every public function must have `@doc` with:
+          - What it does
+          - Parameters and return values
+          - Example usage for non-obvious functions
+        - Every public function must have `@spec`
+
+      - Create `lib/cortex/guides/` with longer-form guides:
+        - `architecture.md` — system architecture overview with ASCII diagrams
+        - `dag-orchestration.md` — how DAG mode works, config format, examples
+        - `gossip-mode.md` — how gossip mode works, when to use it
+        - `configuration.md` — all config options, env vars, defaults
+
+      - `pages/` directory for ExDoc:
+        - Configure `mix.exs` to include guides in ExDoc output
+        - Group modules logically in ExDoc sidebar
+
+      Update `mix.exs`: add `{:ex_doc, "~> 0.34", only: :dev, runtime: false}`.
+
+  - role: "README Lead"
+    doc: readme.md
+    focus: |
+      Write a comprehensive README.md for the project.
+
+      Files to create/update:
+      - `README.md` — Complete project README:
+        ## Cortex
+        One-line description + badges (Elixir version, build status)
+
+        ## What is Cortex?
+        2-3 paragraph explanation of what it does and why
+
+        ## Quick Start
+        Prerequisites, install, setup, first run — copy-pasteable commands
+
+        ## Usage
+        ### DAG Orchestration
+        - Config format (orchestra.yaml)
+        - Running a project
+        - Viewing results
+
+        ### Gossip Mode
+        - When to use it
+        - Starting a gossip network
+        - Injecting knowledge
+
+        ### Dashboard
+        - Starting the web UI
+        - Screenshots/descriptions of each page
+
+        ## Configuration
+        All environment variables and config options in a table
+
+        ## Architecture
+        High-level architecture diagram (ASCII or Mermaid)
+        Key modules and what they do
+
+        ## Observability
+        How to start the Grafana stack
+        Available dashboards
+        How to view logs and traces
+
+        ## Development
+        Running tests, benchmarks, formatter, credo
+
+        ## Deployment
+        Mix releases, Docker, clustering
+
+  - role: "Code Quality Lead"
+    doc: code-quality.md
+    focus: |
+      Enforce consistent code style, remove dead code, fix warnings.
+
+      Tasks:
+      - Add and configure Credo:
+        Update `mix.exs`: add `{:credo, "~> 1.7", only: [:dev, :test], runtime: false}`.
+        Create `.credo.exs` with strict configuration.
+        Run `mix credo --strict` and fix all issues.
+
+      - Run `mix compile --warnings-as-errors` and fix all warnings.
+
+      - Audit for dead code:
+        - Unused functions (private functions never called)
+        - Unused modules (modules never referenced)
+        - Commented-out code blocks
+        - TODO/FIXME/HACK comments — resolve or document in issues
+
+      - Style consistency:
+        - Run `mix format --check-formatted` — fix any violations
+        - Consistent alias ordering (alphabetical)
+        - Consistent use of pipe operator
+        - Consistent pattern: `{:ok, result}` / `{:error, reason}`
+        - No bare `rescue` without specific exception types
+
+      - Module organization:
+        - Verify `lib/` structure mirrors logical component boundaries
+        - Move any misplaced modules
+        - Ensure test structure mirrors lib structure
+
+  - role: "Developer Experience Lead"
+    doc: dev-experience.md
+    focus: |
+      Improve the developer setup and workflow experience.
+
+      Files to create:
+      - `lib/mix/tasks/cortex.setup.ex` — Setup task.
+        `mix cortex.setup` — creates database, runs migrations, seeds example data,
+        prints getting-started instructions.
+
+      - `lib/mix/tasks/cortex.run.ex` — Convenience run task.
+        `mix cortex.run <config.yaml>` — loads config, validates, runs orchestration.
+        Wraps the Runner.run/2 function for CLI usage.
+
+      - `lib/mix/tasks/cortex.validate.ex` — Config validation task.
+        `mix cortex.validate <config.yaml>` — validates config, prints errors/warnings.
+
+      - `lib/mix/tasks/cortex.demo.ex` — Demo task.
+        `mix cortex.demo` — starts a small gossip network with 5 agents,
+        injects some knowledge, shows it propagating. Good for first-time users.
+
+      - `priv/repo/seeds.exs` — Seed data for development.
+        Creates a few example runs with team results for dashboard testing.
+
+      - `mix.exs` — Add aliases:
+        ```elixir
+        defp aliases do
+          [
+            setup: ["deps.get", "cortex.setup"],
+            "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
+            "ecto.reset": ["ecto.drop", "ecto.setup"],
+            test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"]
+          ]
+        end
+        ```
+
+      - `examples/simple.yaml` — Simple 2-team example orchestra config.
+      - `examples/full.yaml` — Full 4-team example with all config options.
+      - `examples/gossip.exs` — Example script for starting a gossip network.

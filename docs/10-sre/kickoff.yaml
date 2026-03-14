@@ -1,0 +1,266 @@
+phase: "SRE"
+
+goal: >
+  Build the full observability stack — Telemetry instrumentation, structured logging,
+  distributed tracing, Prometheus metrics export, and the Grafana suite (Grafana +
+  Prometheus + Loki + Tempo) for dashboards, log aggregation, and trace visualization.
+  Includes health checks, alerting rules, and the infrastructure to run it all.
+
+system_context: |
+  ## Project: Cortex
+  Cortex is a multi-agent orchestration system built on Elixir/OTP. All functional
+  and performance phases are complete. This phase adds production observability.
+
+  ## What This Phase Builds
+  1. **Telemetry** — :telemetry events on every critical operation
+  2. **Metrics** — Prometheus exposition via `prom_ex` or `telemetry_metrics_prometheus`
+  3. **Structured Logging** — JSON logs via LoggerJSON, shipped to Loki
+  4. **Distributed Tracing** — OpenTelemetry spans, exported to Tempo
+  5. **Grafana Dashboards** — pre-built dashboards for orchestration runs, gossip,
+     LLM usage, system health
+  6. **Infrastructure** — docker-compose with Grafana + Prometheus + Loki + Tempo
+  7. **Alerts** — Prometheus alerting rules for critical conditions
+  8. **Health Checks** — HTTP endpoints for liveness/readiness
+
+  ## Observability Architecture
+  ```
+  Cortex Application
+  ├── :telemetry events ──→ Prometheus exporter ──→ Prometheus ──→ Grafana
+  ├── Logger (JSON) ──→ stdout ──→ Promtail ──→ Loki ──→ Grafana
+  └── OpenTelemetry ──→ OTLP exporter ──→ Tempo ──→ Grafana
+  ```
+
+  ## Telemetry Events to Instrument
+  | Event | Measurements | Metadata |
+  |-------|-------------|----------|
+  | `[:cortex, :orchestration, :run]` | duration_ms, team_count, total_cost | name, status |
+  | `[:cortex, :orchestration, :tier]` | duration_ms, team_count | tier_index, status |
+  | `[:cortex, :orchestration, :team]` | duration_ms, cost_usd, num_turns | team_name, status |
+  | `[:cortex, :spawner, :spawn]` | duration_ms, cost_usd | team_name, model, exit_code |
+  | `[:cortex, :llm, :request]` | duration_ms, input_tokens, output_tokens | model, status |
+  | `[:cortex, :gossip, :exchange]` | duration_us, entries_sent, entries_received | initiator, responder |
+  | `[:cortex, :knowledge, :merge]` | entries_merged, store_size | agent_id |
+  | `[:cortex, :tool, :execution]` | duration_ms | tool_name, success |
+  | `[:cortex, :agent, :lifecycle]` | — | action, agent_id, role |
+  | `[:cortex, :query, :route]` | hops, duration_ms, response_count | query_id |
+
+  ## Grafana Dashboards to Build
+  1. **Orchestration Overview** — active runs, run history, cost trends, success rate
+  2. **Run Detail** — per-team metrics, tier timing, cost breakdown
+  3. **LLM Usage** — token consumption, cost per model, request latency, error rate
+  4. **Gossip Network** — exchange rate, convergence time, knowledge growth, topology
+  5. **System Health** — BEAM metrics (process count, memory, scheduler utilization, GC)
+
+  ## Alert Rules
+  - Run failed → alert
+  - LLM error rate > 10% in 5min → alert
+  - Agent crash rate > 3/min → alert
+  - Memory usage > 80% → warning
+  - Gossip convergence time > 60s → warning
+
+dependencies:
+  - PROJECT.md
+  - docs/01-otp-foundation/kickoff.yaml
+  - docs/03-dag-orchestration/kickoff.yaml
+  - docs/05-liveview-dashboard/kickoff.yaml
+  - docs/07-gossip-advanced/kickoff.yaml
+
+plans_dir: docs/10-sre/plans
+content_dir: docs/10-sre/content
+
+teammates:
+  - role: "Telemetry Lead"
+    doc: telemetry.md
+    focus: |
+      Instrument all Cortex subsystems with :telemetry events and set up
+      Prometheus metrics export.
+
+      Files to create:
+      - `lib/cortex/telemetry.ex` — Telemetry event definitions.
+        Define all event names as module attributes for discoverability.
+        Helper functions:
+        `span(event_name, metadata, fun)` — wraps :telemetry.span for easy use.
+        `emit(event_name, measurements, metadata)` — wraps :telemetry.execute.
+
+      - `lib/cortex/telemetry/metrics.ex` — Telemetry.Metrics definitions.
+        Returns a list of metric definitions:
+        - Counters: run count, team count, LLM requests, gossip exchanges
+        - Summaries: run duration, team duration, LLM latency
+        - Distributions: cost per run, tokens per request
+        - Last values: active runs, agent count, knowledge store size
+
+      - `lib/cortex/telemetry/prom_ex.ex` — PromEx module for Prometheus export.
+        Uses `PromEx` to expose `/metrics` endpoint.
+        Includes built-in BEAM plugins (memory, processes, schedulers).
+        Custom plugin for Cortex-specific metrics.
+
+      Instrument existing modules (add :telemetry.span or :telemetry.execute):
+      - `Cortex.Orchestration.Runner` — run start/stop, tier start/stop, team start/stop
+      - `Cortex.Orchestration.Spawner` — spawn duration, cost, exit code
+      - `Cortex.LLM.Claude` — request duration, tokens, status
+      - `Cortex.Gossip.Protocol` — exchange duration, entries transferred
+      - `Cortex.Knowledge.Store` — merge operations, store size
+      - `Cortex.Tool.Executor` — execution duration, tool name, success/failure
+      - `Cortex.Agent.Server` — lifecycle events (start/stop)
+
+      Update `mix.exs`: add `{:prom_ex, "~> 1.9"}`, `{:telemetry_metrics, "~> 1.0"}`,
+      `{:telemetry_poller, "~> 1.1"}`.
+
+  - role: "Logging Lead"
+    doc: logging.md
+    focus: |
+      Set up structured JSON logging and Loki integration.
+
+      Files to create:
+      - `lib/cortex/telemetry/log_handler.ex` — Telemetry handler that logs events
+        as structured JSON. Attaches to all Cortex telemetry events.
+        Each log line includes: timestamp, level, event_type, measurements, metadata,
+        correlation IDs (run_id, team_name, agent_id).
+
+      - Update `config/config.exs` — Configure Logger with JSON backend.
+        Use `LoggerJSON` for structured output.
+
+      - `config/log_config.exs` — Logging configuration.
+        Dev: human-readable console output.
+        Prod: JSON to stdout (for Promtail/Loki ingestion).
+        Test: warn level only.
+
+      - `lib/cortex/context.ex` — Correlation context module.
+        Uses Process dictionary or Logger metadata to propagate:
+        `run_id`, `team_name`, `agent_id`, `tier_index`.
+        `put_context(key, value)`, `get_context(key)`, `with_context(map, fun)`.
+        All log lines automatically include active context.
+
+      Update `mix.exs`: add `{:logger_json, "~> 6.0"}`.
+
+      Add structured logging calls at key points:
+      - Run start/complete/fail
+      - Tier start/complete
+      - Team spawn/complete/fail
+      - LLM request/response
+      - Gossip exchange
+      - Agent lifecycle
+
+  - role: "Tracing Lead"
+    doc: tracing.md
+    focus: |
+      Set up distributed tracing with OpenTelemetry, exported to Tempo.
+
+      Files to create:
+      - `lib/cortex/telemetry/tracer.ex` — OpenTelemetry tracing setup.
+        Configures the OTel SDK with OTLP exporter pointing to Tempo.
+        Sets up automatic span creation for key operations.
+
+      - `lib/cortex/telemetry/otel_handler.ex` — Bridges :telemetry events to OTel spans.
+        Creates spans for:
+        - Orchestration run (root span, contains entire run)
+          - Tier execution (child span per tier)
+            - Team execution (child span per team within tier)
+              - claude -p spawn (child span)
+        - LLM requests (spans with token counts as attributes)
+        - Gossip exchanges (spans with agent IDs)
+        - Tool executions (spans with tool name)
+
+      - Trace context propagation:
+        - Run → tier → team → spawn forms a natural span hierarchy
+        - Gossip exchanges link spans across agents via trace context
+
+      Update `mix.exs`: add
+      `{:opentelemetry, "~> 1.4"}`,
+      `{:opentelemetry_api, "~> 1.3"}`,
+      `{:opentelemetry_exporter, "~> 1.7"}`,
+      `{:opentelemetry_phoenix, "~> 1.2"}`,
+      `{:opentelemetry_ecto, "~> 1.2"}`.
+
+      Update `config/runtime.exs` with OTel exporter config (Tempo endpoint).
+
+  - role: "Infra Lead"
+    doc: infra.md
+    focus: |
+      Build the observability infrastructure — Grafana, Prometheus, Loki, Tempo,
+      docker-compose, dashboards, and alerting rules.
+
+      Files to create:
+      - `infra/docker-compose.yml` — Full observability stack:
+        ```yaml
+        services:
+          prometheus:
+            image: prom/prometheus:latest
+            ports: ["9090:9090"]
+            volumes: ["./prometheus.yml:/etc/prometheus/prometheus.yml"]
+
+          grafana:
+            image: grafana/grafana:latest
+            ports: ["3000:3000"]
+            volumes:
+              - "./grafana/provisioning:/etc/grafana/provisioning"
+              - "./grafana/dashboards:/var/lib/grafana/dashboards"
+            environment:
+              GF_AUTH_ANONYMOUS_ENABLED: "true"
+              GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+
+          loki:
+            image: grafana/loki:latest
+            ports: ["3100:3100"]
+            command: -config.file=/etc/loki/local-config.yaml
+
+          promtail:
+            image: grafana/promtail:latest
+            volumes:
+              - "./promtail.yml:/etc/promtail/config.yml"
+              - "/var/log:/var/log"
+            command: -config.file=/etc/promtail/config.yml
+
+          tempo:
+            image: grafana/tempo:latest
+            ports: ["4317:4317", "3200:3200"]
+            command: ["-config.file=/etc/tempo/config.yaml"]
+            volumes: ["./tempo.yml:/etc/tempo/config.yaml"]
+        ```
+
+      - `infra/prometheus.yml` — Prometheus config.
+        Scrape target: `host.docker.internal:4000/metrics` (Cortex PromEx endpoint).
+        Scrape interval: 15s.
+
+      - `infra/promtail.yml` — Promtail config for shipping logs to Loki.
+      - `infra/tempo.yml` — Tempo config for receiving OTLP traces.
+
+      - `infra/grafana/provisioning/datasources/datasources.yml` — Auto-provision:
+        Prometheus, Loki, Tempo as Grafana data sources.
+
+      - `infra/grafana/provisioning/dashboards/dashboards.yml` — Dashboard provisioning.
+
+      - `infra/grafana/dashboards/orchestration-overview.json` — Grafana dashboard:
+        Active runs, run history chart, cost over time, success/fail rate,
+        team duration distributions.
+
+      - `infra/grafana/dashboards/llm-usage.json` — Grafana dashboard:
+        Token consumption over time, cost by model, request latency histogram,
+        error rate, requests per minute.
+
+      - `infra/grafana/dashboards/gossip-network.json` — Grafana dashboard:
+        Exchange rate, convergence metrics, knowledge growth, active agents.
+
+      - `infra/grafana/dashboards/system-health.json` — Grafana dashboard:
+        BEAM process count, memory usage, scheduler utilization, GC stats,
+        message queue lengths.
+
+      - `infra/grafana/dashboards/run-detail.json` — Grafana dashboard:
+        Per-team cost breakdown, tier timing waterfall, spawner metrics.
+
+      - `infra/prometheus/alerts.yml` — Alerting rules:
+        - `CortexRunFailed` — any run with status=failed
+        - `CortexLLMErrorRate` — error rate > 10% over 5 minutes
+        - `CortexAgentCrashRate` — > 3 agent crashes per minute
+        - `CortexHighMemory` — BEAM memory > 80% of system
+        - `CortexSlowGossipConvergence` — convergence > 60s
+
+      - `lib/cortex_web/health.ex` — Plug for health endpoints.
+        `GET /health/live` — liveness (app is running) → 200
+        `GET /health/ready` — readiness (Repo connected, PubSub up) → 200 or 503
+        Response body: JSON with status, uptime, agent_count, version.
+
+      - `Makefile` or `infra/Makefile` — Convenience commands:
+        `make infra-up` — docker-compose up -d
+        `make infra-down` — docker-compose down
+        `make infra-logs` — docker-compose logs -f

@@ -1,0 +1,167 @@
+phase: "OTP Foundation"
+
+goal: >
+  Build the shared OTP primitives that both orchestration and gossip modes depend on —
+  Agent GenServer, supervision tree, LLM client (Claude API), tool execution runtime,
+  config parsing, and event system. Pure Elixir/OTP, no Phoenix yet.
+
+system_context: |
+  ## Project: Cortex
+  Cortex is a multi-agent orchestration system built on Elixir/OTP. The primary use case
+  is DAG-based task execution — define teams with dependencies, execute in tiers, pass
+  results forward. A secondary gossip mode enables emergent exploration. Both modes share
+  the same core primitives built in this phase.
+
+  ## What This Phase Builds
+  The OTP foundation — everything both coordination modes need:
+  - Agent GenServer (lifecycle, state, configuration)
+  - Supervision tree (DynamicSupervisor, Registry, Application)
+  - LLM Client (Claude API via Req, rate limiting, behaviour for swappability)
+  - Tool Runtime (sandboxed execution in isolated processes)
+  - Event system (PubSub for internal communication)
+  - Config parsing (YAML)
+
+  No DAG logic, no gossip protocol, no Phoenix — those come in later phases.
+
+  ## Architecture
+  ```
+  Cortex.Application (top-level supervisor)
+  ├── Cortex.Agent.Supervisor (DynamicSupervisor for agent processes)
+  ├── Cortex.Agent.Registry (Registry for agent lookup by id)
+  ├── Cortex.LLM.RateLimiter (GenServer — token bucket rate limiting)
+  ├── Cortex.Tool.Supervisor (Task.Supervisor for sandboxed tool execution)
+  └── Cortex.Events.PubSub (Phoenix.PubSub for system-wide events)
+  ```
+
+  Each agent is a GenServer (`Cortex.Agent.Server`) that holds:
+  - id, name, role, config
+  - status (:idle, :running, :done, :failed)
+  - metadata (arbitrary map for coordination modes to use)
+  - started_at, updated_at timestamps
+
+  ## Coding Conventions
+  - Module naming: `Cortex.<Component>.<Module>` (e.g., `Cortex.Agent.Server`)
+  - Use `@moduledoc` and `@doc` for public functions
+  - Use typespecs (`@spec`) for all public functions
+  - Pattern match in function heads over case statements
+  - Use `defstruct` with `@enforce_keys` for all data structures
+  - Tests in `test/cortex/<component>/` mirroring `lib/` structure
+  - Use `ExUnit.Case, async: true` where possible
+  - Name test files `*_test.exs`
+
+  ## Mix Project Setup
+  - App name: `:cortex`
+  - Elixir ~> 1.17
+  - Dependencies: `phoenix_pubsub`, `yaml_elixir`, `uniq` (UUIDs), `jason`
+  - No Phoenix/Ecto yet (Phase 5)
+
+dependencies:
+  - PROJECT.md
+
+plans_dir: docs/01-otp-foundation/plans
+content_dir: docs/01-otp-foundation/content
+
+teammates:
+  - role: "Scaffold Lead"
+    doc: scaffold.md
+    focus: |
+      Set up the Mix project, application supervision tree, registry, and event system.
+
+      Files to create:
+      - `mix.exs` — Mix project config. App name `:cortex`, elixir `~> 1.17`.
+        Deps: `{:phoenix_pubsub, "~> 2.1"}`, `{:uniq, "~> 0.6"}`,
+        `{:yaml_elixir, "~> 2.9"}`, `{:jason, "~> 1.4"}`.
+        `elixirc_paths` set to `["lib", "test/support"]` for test env.
+
+      - `lib/cortex.ex` — Top-level module with convenience functions.
+        `Cortex.start_agent(config)`, `Cortex.stop_agent(id)`, `Cortex.list_agents()`.
+        These delegate to the appropriate subsystems.
+
+      - `lib/cortex/application.ex` — Application module. Starts the supervision tree:
+        Phoenix.PubSub (name: Cortex.PubSub), Cortex.Agent.Registry (via Registry),
+        Cortex.Agent.Supervisor (DynamicSupervisor), Cortex.Tool.Supervisor (Task.Supervisor),
+        Cortex.Tool.Registry (Agent-based tool lookup).
+
+      - `lib/cortex/agent/supervisor.ex` — DynamicSupervisor for agent processes.
+        `start_agent(config)` — starts a child Cortex.Agent.Server under supervision.
+        `stop_agent(id)` — terminates child by id.
+        `list_agents()` — returns all running agent pids/ids.
+
+      - `lib/cortex/agent/registry.ex` — Thin wrapper around Registry for agent lookup.
+        Agents register as `{Cortex.Agent.Registry, agent_id}`.
+        `lookup(agent_id)` — returns pid or :not_found.
+        `all()` — returns list of {agent_id, pid}.
+
+      - `lib/cortex/events.ex` — Event helper module.
+        `broadcast(event_type, payload)` — publishes to Cortex.PubSub on "cortex:events".
+        `subscribe()` — subscribes to the events topic.
+        Event types: :agent_started, :agent_stopped, :agent_updated, :run_started,
+        :run_completed, :tier_started, :tier_completed, :team_started, :team_completed.
+
+      - `config/config.exs` — Basic config (logger level, pubsub config).
+      - `config/dev.exs` — Dev-specific config.
+      - `config/test.exs` — Test config (logger warn only).
+      - `test/test_helper.exs` — ExUnit setup.
+      - `.formatter.exs` — Elixir formatter config.
+      - `.gitignore` — Standard Elixir gitignore.
+
+  - role: "Agent Core Lead"
+    doc: agent-core.md
+    focus: |
+      Build the agent GenServer — the fundamental unit of work in Cortex.
+
+      Files to create:
+      - `lib/cortex/agent/server.ex` — GenServer implementing the agent process.
+        State: id, name, role, config, status, metadata, started_at, updated_at.
+        Callbacks:
+        - `init/1` — set initial state, register via Registry, broadcast :agent_started
+        - `handle_call(:get_state, ...)` — return current state
+        - `handle_call({:update_status, status}, ...)` — update status + broadcast
+        - `handle_call({:update_metadata, key, value}, ...)` — update metadata map
+        - `handle_cast({:assign_work, work}, ...)` — receive work assignment
+        - `terminate/2` — broadcast :agent_stopped
+        Start via: `GenServer.start_link(__MODULE__, config, name: via_tuple(id))`
+
+      - `lib/cortex/agent/config.ex` — Agent configuration struct.
+        Fields: name (string), role (string), model (string, default "sonnet"),
+        max_turns (integer, default 200), timeout_minutes (integer, default 30),
+        metadata (map, default %{}).
+        Validate: name and role are required, non-empty.
+
+      - `lib/cortex/agent/state.ex` — Agent state struct used internally by GenServer.
+        Fields: id (uuid, generated on init), config (Config struct),
+        status (:idle | :running | :done | :failed), metadata (map),
+        started_at (DateTime), updated_at (DateTime).
+
+  - role: "Tool Runtime Lead"
+    doc: tool-runtime.md
+    focus: |
+      Build the tool execution system — sandboxed tool execution in isolated processes.
+
+      Files to create:
+      - `lib/cortex/tool/behaviour.ex` — Tool behaviour.
+        ```elixir
+        @callback name() :: String.t()
+        @callback description() :: String.t()
+        @callback schema() :: map()  # JSON schema for args
+        @callback execute(args :: map()) :: {:ok, result :: term()} | {:error, reason :: term()}
+        ```
+
+      - `lib/cortex/tool/executor.ex` — Executes tools in isolated Task processes.
+        `run(tool_module, args, opts \\ [])` — spawns a Task under Tool.Supervisor,
+        runs the tool's execute/1, enforces timeout (default 30s).
+        Returns {:ok, result} | {:error, :timeout} | {:error, reason}.
+        Catches exceptions — a crashing tool never takes down the calling agent.
+
+      - `lib/cortex/tool/supervisor.ex` — Task.Supervisor for tool execution.
+        Started under Application supervisor. Named `Cortex.Tool.Supervisor`.
+
+      - `lib/cortex/tool/registry.ex` — Registry of available tools.
+        `register(tool_module)` — adds a tool.
+        `lookup(tool_name)` — finds tool module by name.
+        `list()` — returns all registered tools.
+        Backed by an Agent process for simplicity.
+
+      - `lib/cortex/tool/builtin/shell.ex` — Shell command execution tool.
+        Runs a shell command via System.cmd/3 with timeout and output capture.
+        Restricted to a configurable allowlist of commands.

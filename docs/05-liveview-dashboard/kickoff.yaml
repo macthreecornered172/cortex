@@ -1,0 +1,225 @@
+phase: "LiveView Dashboard"
+
+goal: >
+  Build the Phoenix web app with LiveView dashboard — real-time DAG visualization,
+  run management, agent logs, cost tracking, and persistence via Ecto + SQLite.
+  After this phase, you can watch and control orchestration runs from a browser.
+
+system_context: |
+  ## Project: Cortex
+  Cortex is a multi-agent orchestration system built on Elixir/OTP.
+  Phase 1: OTP foundation (agents, supervision, LLM client, tools).
+  Phase 2: QE validation of foundation.
+  Phase 3: DAG orchestration (config, DAG engine, spawner, workspace, runner).
+  Phase 4: QE validation of orchestration.
+
+  ## What This Phase Builds
+  The web interface. A Phoenix LiveView app that:
+  1. Visualizes the DAG — teams as nodes, dependencies as edges, color-coded by status
+  2. Shows run progress in real-time as tiers execute and teams complete
+  3. Provides run management — start runs, view history, retry failed teams
+  4. Shows per-team details — logs, costs, durations, result summaries
+  5. Persists run data via Ecto + SQLite for history and analytics
+
+  ## Architecture (after Phase 3)
+  ```
+  Cortex.Application
+  ├── Cortex.Agent.Supervisor (DynamicSupervisor)
+  ├── Cortex.Agent.Registry (Registry)
+  ├── Cortex.LLM.RateLimiter (GenServer)
+  ├── Cortex.Tool.Supervisor (Task.Supervisor)
+  └── Cortex.Events.PubSub (Phoenix.PubSub)
+  ```
+
+  Orchestration modules:
+  - Cortex.Orchestration.Config (YAML parsing + validation)
+  - Cortex.Orchestration.DAG (Kahn's algorithm → tiers)
+  - Cortex.Orchestration.Injection (prompt building)
+  - Cortex.Orchestration.Spawner (claude -p process management)
+  - Cortex.Orchestration.Workspace (state, registry, results, logs)
+  - Cortex.Orchestration.Runner (orchestration loop)
+
+  Events available via PubSub ("cortex:events"):
+  :run_started, :run_completed, :tier_started, :tier_completed,
+  :team_started, :team_completed, :agent_started, :agent_stopped
+
+  ## This Phase Adds
+  ```
+  Cortex.Application
+  ├── ... (existing)
+  ├── Cortex.Repo (Ecto + SQLite)
+  ├── Cortex.Store.EventSink (persists PubSub events)
+  └── CortexWeb.Endpoint (Phoenix)
+  ```
+
+  ## Pages
+  - `/` — Dashboard: recent runs, system status, quick-start
+  - `/runs` — Run list: all runs with status, cost, duration
+  - `/runs/:id` — Run detail: DAG visualization, tier progress, team statuses
+  - `/runs/:id/teams/:name` — Team detail: logs, result, cost, duration
+  - `/new` — New run: upload/paste orchestra.yaml, validate, launch
+
+  ## Phoenix Setup
+  Convert from plain Mix app to Phoenix app:
+  - Add Phoenix, LiveView, Ecto dependencies
+  - Minimal boilerplate (no mailer, no gettext)
+  - Tailwind CSS via `tailwind` hex package
+  - Function components for reusable UI
+
+  ## Coding Conventions
+  - LiveView modules in `lib/cortex_web/live/`
+  - Components in `lib/cortex_web/components/`
+  - Ecto schemas in `lib/cortex/store/schemas/`
+  - Migrations in `priv/repo/migrations/`
+  - Keep LiveViews focused — extract logic into contexts
+  - Use streams for large lists
+
+dependencies:
+  - PROJECT.md
+  - docs/01-otp-foundation/kickoff.yaml
+  - docs/03-dag-orchestration/kickoff.yaml
+
+plans_dir: docs/05-liveview-dashboard/plans
+content_dir: docs/05-liveview-dashboard/content
+
+teammates:
+  - role: "Phoenix Setup Lead"
+    doc: phoenix-setup.md
+    focus: |
+      Set up Phoenix, LiveView, and the web layer boilerplate.
+
+      Files to create/modify:
+      - Update `mix.exs` — add deps:
+        `{:phoenix, "~> 1.7"}`, `{:phoenix_live_view, "~> 1.0"}`,
+        `{:phoenix_html, "~> 4.1"}`, `{:phoenix_live_reload, "~> 1.5", only: :dev}`,
+        `{:tailwind, "~> 0.2", only: :dev}`, `{:heroicons, "~> 0.5"}`,
+        `{:phoenix_live_dashboard, "~> 0.8"}`.
+
+      - `lib/cortex_web.ex` — Web module with Phoenix helpers.
+        Define `controller`, `live_view`, `live_component`, `html`, `router`,
+        `verified_routes` helper macros.
+
+      - `lib/cortex_web/endpoint.ex` — Phoenix endpoint with LiveView socket.
+
+      - `lib/cortex_web/router.ex` — Router with LiveView routes.
+        ```elixir
+        live "/", DashboardLive, :index
+        live "/runs", RunListLive, :index
+        live "/runs/:id", RunDetailLive, :show
+        live "/runs/:id/teams/:name", TeamDetailLive, :show
+        live "/new", NewRunLive, :index
+        ```
+
+      - `lib/cortex_web/layouts.ex` — Layout module.
+      - `lib/cortex_web/layouts/root.html.heex` — Root layout with Tailwind, nav sidebar.
+        Sidebar nav: Dashboard, Runs, New Run. Dark theme. Clean, minimal.
+      - `lib/cortex_web/layouts/app.html.heex` — App layout with flash messages.
+
+      - `lib/cortex_web/components/core_components.ex` — Shared UI components:
+        stat cards, status badges, cost display, duration display, team pills.
+
+      - `assets/css/app.css` — Tailwind imports + custom styles.
+      - `assets/tailwind.config.js` — Tailwind config.
+
+      Update `config/` for Phoenix endpoint (port 4000, live_reload patterns).
+      Update `lib/cortex/application.ex` to start CortexWeb.Endpoint.
+
+  - role: "DAG Visualization Lead"
+    doc: dag-viz.md
+    focus: |
+      Build the DAG visualization — SVG rendering of the team dependency graph
+      with real-time status updates.
+
+      Files to create:
+      - `lib/cortex_web/live/run_detail_live.ex` — Run detail LiveView.
+        Shows the DAG for a specific run:
+        - SVG graph: teams as nodes (rectangles with name + status), dependencies as edges
+        - Nodes color-coded: gray (pending), blue (running), green (done), red (failed)
+        - Tier layout: teams arranged in columns by tier (left to right)
+        - Below DAG: tier progress bar showing current tier
+        - Per-team cards: name, status, cost, duration, clickable to detail
+        Subscribes to PubSub events filtered by run_id.
+        Updates node colors and progress in real-time as teams complete.
+
+      - `lib/cortex_web/components/dag_components.ex` — SVG DAG components:
+        `dag_graph(assigns)` — renders full DAG as SVG.
+        `team_node(assigns)` — renders a team as an SVG rect + text + status icon.
+        `dependency_edge(assigns)` — renders an arrow between dependent teams.
+        `tier_column(assigns)` — groups teams by tier in a column layout.
+
+      - `lib/cortex_web/live/helpers/dag_layout.ex` — DAG layout calculator.
+        Takes tiers (list of lists) and calculates x,y positions for each team node.
+        Tier index determines x position. Position within tier determines y.
+        Returns a map of team_name → %{x: int, y: int, tier: int}.
+
+  - role: "Run Management Lead"
+    doc: run-management.md
+    focus: |
+      Build run management pages — dashboard, run list, new run, team detail.
+
+      Files to create:
+      - `lib/cortex_web/live/dashboard_live.ex` — Main dashboard.
+        Shows: recent runs (last 10), system status (agents running, active runs),
+        quick action to start a new run. Subscribes to PubSub for live updates.
+
+      - `lib/cortex_web/live/run_list_live.ex` — Run history.
+        Paginated list of all runs. Each row: name, status, team count, total cost,
+        duration, started_at. Sortable by any column. Clickable to run detail.
+
+      - `lib/cortex_web/live/new_run_live.ex` — Start a new run.
+        Textarea to paste orchestra.yaml content (or file path input).
+        "Validate" button — parses and shows validation results (errors + warnings).
+        "Launch" button — starts the orchestration run, redirects to run detail page.
+        Shows config preview: team names, DAG structure, dependency graph.
+
+      - `lib/cortex_web/live/team_detail_live.ex` — Team detail within a run.
+        Shows: team name, role, status, cost, duration, session_id.
+        Tabs:
+        - Result: the team's output summary
+        - Log: raw claude -p log output (streamed, scrollable)
+        - Config: the team's config from orchestra.yaml
+        - Prompt: the full prompt that was sent to claude -p
+
+  - role: "Persistence Lead"
+    doc: persistence.md
+    focus: |
+      Set up Ecto + SQLite and create the persistence layer for run history.
+
+      Files to create:
+      - `lib/cortex/repo.ex` — Ecto Repo.
+        `use Ecto.Repo, otp_app: :cortex, adapter: Ecto.Adapters.SQLite3`
+
+      - `lib/cortex/store/schemas/run.ex` — Run schema.
+        Fields: id (uuid), name (string), config_yaml (text), status (string),
+        team_count (integer), total_cost_usd (float), total_duration_ms (integer),
+        started_at (utc_datetime), completed_at (utc_datetime).
+
+      - `lib/cortex/store/schemas/team_run.ex` — Team run schema.
+        Fields: id (uuid), run_id (references runs), team_name (string),
+        role (string), status (string), tier (integer), cost_usd (float),
+        duration_ms (integer), num_turns (integer), session_id (string),
+        result_summary (text), prompt (text), log_path (string),
+        started_at (utc_datetime), completed_at (utc_datetime).
+
+      - `lib/cortex/store/schemas/event_log.ex` — Event log schema.
+        Fields: id (uuid), run_id (string), event_type (string),
+        payload (map/json), source (string), created_at (utc_datetime).
+
+      - `lib/cortex/store.ex` — Context module for persistence.
+        `create_run(attrs)`, `update_run(run, attrs)`, `get_run(id)`,
+        `list_runs(opts)` (pagination, sorting).
+        `create_team_run(attrs)`, `update_team_run(team_run, attrs)`,
+        `get_team_runs(run_id)`.
+        `log_event(attrs)`, `recent_events(run_id, limit)`.
+
+      - `lib/cortex/store/event_sink.ex` — GenServer that subscribes to PubSub
+        events and persists them. Batches writes for efficiency.
+
+      - Migrations:
+        `priv/repo/migrations/001_create_runs.exs`
+        `priv/repo/migrations/002_create_team_runs.exs`
+        `priv/repo/migrations/003_create_event_logs.exs`
+
+      Update `mix.exs`: add `{:ecto_sqlite3, "~> 0.16"}`, `{:ecto_sql, "~> 3.11"}`.
+      Update config: Repo database path `cortex_#{Mix.env()}.db`.
+      Update application.ex: start Repo and EventSink.

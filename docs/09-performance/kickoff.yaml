@@ -1,0 +1,146 @@
+phase: "Performance"
+
+goal: >
+  Benchmark, profile, and optimize Cortex. Identify bottlenecks in the DAG engine,
+  gossip protocol, spawner, and LiveView dashboard. Load test with large DAGs and
+  high agent counts. Optimize critical paths.
+
+system_context: |
+  ## Project: Cortex
+  Cortex is a multi-agent orchestration system built on Elixir/OTP. All functional
+  phases are built and validated (OTP foundation, DAG orchestration, LiveView dashboard,
+  gossip mode, distribution). This phase focuses on performance.
+
+  ## What This Phase Does
+  1. **Benchmarks** — Benchee benchmarks for critical operations
+  2. **Profiling** — :fprof/:eprof to identify hotspots
+  3. **Load Testing** — large DAGs, high agent counts, concurrent runs
+  4. **Optimization** — fix identified bottlenecks
+
+  ## Critical Paths to Benchmark
+  - Config parsing + validation (how fast can we load a 100-team config?)
+  - DAG tier building (Kahn's on large graphs)
+  - Prompt injection (string building for complex prompts with many upstream results)
+  - Workspace state read/write (JSON serialization under concurrent access)
+  - Gossip exchange (digest building, diffing, merging)
+  - Knowledge store merge (CRDT merge with large stores)
+  - Vector clock operations (compare, merge with many nodes)
+  - LiveView DAG rendering (SVG generation for large graphs)
+  - Ecto query performance (run history with many runs)
+
+  ## Tools
+  - `Benchee` — microbenchmarks with statistical analysis
+  - `:fprof` / `:eprof` — BEAM profiling
+  - `:observer` — runtime system observation
+  - Custom load test scripts via Mix tasks
+
+  ## Coding Conventions
+  - Benchmarks in `bench/` directory
+  - Load test scripts as Mix tasks in `lib/mix/tasks/`
+  - Profile results documented in `docs/09-performance/content/`
+  - Optimizations should not change public APIs
+
+dependencies:
+  - PROJECT.md
+  - docs/01-otp-foundation/kickoff.yaml
+  - docs/03-dag-orchestration/kickoff.yaml
+  - docs/05-liveview-dashboard/kickoff.yaml
+  - docs/07-gossip-advanced/kickoff.yaml
+
+plans_dir: docs/09-performance/plans
+content_dir: docs/09-performance/content
+
+teammates:
+  - role: "Benchmark Lead"
+    doc: benchmarks.md
+    focus: |
+      Create Benchee benchmarks for all critical operations.
+
+      Files to create:
+      - Update `mix.exs` — add `{:benchee, "~> 1.3", only: :dev}`.
+
+      - `bench/config_bench.exs` — Config benchmarks:
+        - Parse small config (3 teams)
+        - Parse large config (50 teams)
+        - Validate config with many dependencies
+
+      - `bench/dag_bench.exs` — DAG benchmarks:
+        - Build tiers: 10 teams, 50 teams, 100 teams
+        - Linear chain vs wide parallel vs diamond patterns
+        - Cycle detection on large graphs
+
+      - `bench/knowledge_bench.exs` — Knowledge store benchmarks:
+        - put: 100, 1000, 10000 entries
+        - merge: two stores of 100, 1000, 10000 entries each
+        - digest building: store with 1000, 10000 entries
+        - vector_clock compare: 10, 100, 1000 nodes
+
+      - `bench/workspace_bench.exs` — Workspace benchmarks:
+        - read_state with 10, 50, 100 team states
+        - write_state with varying sizes
+        - Concurrent read/write under load
+
+      - `bench/injection_bench.exs` — Prompt injection benchmarks:
+        - Solo agent with 0, 5, 20 upstream results
+        - Team lead with 10 members and 20 upstream results
+        - Prompt string size at various scales
+
+  - role: "Profiling Lead"
+    doc: profiling.md
+    focus: |
+      Profile Cortex under realistic workloads and identify bottlenecks.
+
+      Files to create:
+      - `lib/mix/tasks/cortex.profile.ex` — Mix task for profiling.
+        `mix cortex.profile <scenario>` where scenario is one of:
+        - `dag_run` — profile a full DAG orchestration run (mock claude)
+        - `gossip_network` — profile 20 agents gossiping for 30 seconds
+        - `liveview_render` — profile DAG rendering for a large graph
+        Each scenario:
+        1. Sets up the scenario
+        2. Runs under :fprof
+        3. Outputs profile results to docs/09-performance/content/
+        4. Prints top 20 hotspots
+
+      - `docs/09-performance/content/profiling-guide.md` — How to use the profiler:
+        commands to run, how to read results, common hotspot patterns.
+
+  - role: "Load Testing Lead"
+    doc: load-testing.md
+    focus: |
+      Load test Cortex at scale to find breaking points.
+
+      Files to create:
+      - `lib/mix/tasks/cortex.loadtest.ex` — Mix task for load testing.
+        `mix cortex.loadtest <scenario>` where scenario is:
+        - `large_dag` — 50-team DAG with mock claude, measure total time
+        - `many_agents` — spin up 100, 500, 1000 gossip agents, measure memory + gossip rate
+        - `concurrent_runs` — 5 DAG runs simultaneously, measure contention
+        - `sustained_gossip` — 50 agents gossiping for 5 minutes, measure convergence + memory
+        Each scenario reports: wall time, memory usage, process count, error count.
+
+      - `lib/cortex/test_helpers/config_generator.ex` — Generate large configs.
+        `generate(team_count, opts)` — creates a valid orchestra config with
+        N teams, random dependencies (acyclic), configurable depth/width.
+        Used by both benchmarks and load tests.
+
+  - role: "Optimization Lead"
+    doc: optimization.md
+    focus: |
+      Identify and fix performance bottlenecks found by benchmarks, profiling,
+      and load testing. This teammate executes AFTER the other three have
+      produced their findings.
+
+      Expected optimizations (subject to profiling results):
+      - ETS-backed knowledge store for large agent networks (vs map in process state)
+      - Batch PubSub events to reduce message volume
+      - Lazy digest building (cache digest, invalidate on knowledge change)
+      - Connection pooling for LLM HTTP client (Req/Finch pool config)
+      - LiveView SVG optimization (only re-render changed nodes)
+      - Workspace state: consider ETS or DETS for hot-path state access
+      - JSON encoding optimization (Jason encoder protocol implementations)
+
+      Files to create:
+      - Any modified source files with optimizations
+      - `docs/09-performance/content/optimization-report.md` — What was found,
+        what was fixed, before/after benchmarks
