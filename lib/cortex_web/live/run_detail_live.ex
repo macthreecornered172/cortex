@@ -882,15 +882,16 @@ defmodule CortexWeb.RunDetailLive do
         </div>
       <% end %>
 
-      <!-- Continue Run Banner (visible when run has pending teams that were never started) -->
-      <%= if has_pending_teams?(@team_runs) and @run.status in ["running", "failed"] do %>
+      <!-- Continue Run Banner (visible when run is interrupted with incomplete teams) -->
+      <% incomplete = incomplete_team_names(@run, @team_runs) %>
+      <%= if incomplete != [] and @run.status in ["running", "failed"] and not @coordinator_alive do %>
         <div class="bg-blue-900/30 border border-blue-800 rounded-lg p-4 mb-6">
           <div class="flex items-center justify-between">
             <div>
-              <p class="text-blue-300 font-medium">Run interrupted — {count_by_status(@team_runs, "pending")} pending team(s)</p>
+              <p class="text-blue-300 font-medium">Run interrupted — {length(incomplete)} incomplete team(s)</p>
               <p class="text-blue-200/70 text-sm">
                 The coordinator process died before all tiers completed.
-                Pending: <span class="font-mono">{pending_team_names(@team_runs) |> Enum.join(", ")}</span>
+                Remaining: <span class="font-mono">{Enum.join(incomplete, ", ")}</span>
               </p>
             </div>
             <button
@@ -1599,15 +1600,48 @@ defmodule CortexWeb.RunDetailLive do
 
   # -- Pending/continue detection --
 
-  defp has_pending_teams?(team_runs) do
-    Enum.any?(team_runs, fn tr -> (tr.status || "pending") == "pending" end)
+  defp incomplete_team_names(run, team_runs) do
+    # Teams that are pending in DB
+    pending =
+      team_runs
+      |> Enum.filter(fn tr -> (tr.status || "pending") == "pending" end)
+      |> Enum.map(& &1.team_name)
+
+    # Teams in config_yaml that have no team_run record at all (runner died before creating them)
+    missing = missing_team_names(run, team_runs)
+
+    (pending ++ missing) |> Enum.sort() |> Enum.uniq()
   end
 
-  defp pending_team_names(team_runs) do
-    team_runs
-    |> Enum.filter(fn tr -> (tr.status || "pending") == "pending" end)
-    |> Enum.map(& &1.team_name)
-    |> Enum.sort()
+  defp missing_team_names(run, team_runs) do
+    if run.config_yaml do
+      case YamlElixir.read_from_string(run.config_yaml) do
+        {:ok, raw} ->
+          config_names =
+            raw
+            |> Map.get("teams", [])
+            |> Enum.map(fn t -> Map.get(t, "name", "") end)
+            |> MapSet.new()
+
+          existing_names = MapSet.new(team_runs, & &1.team_name)
+          completed = MapSet.new(
+            Enum.filter(team_runs, fn tr -> tr.status in ["completed", "done"] end),
+            & &1.team_name
+          )
+
+          config_names
+          |> MapSet.difference(existing_names)
+          |> MapSet.difference(completed)
+          |> MapSet.to_list()
+
+        _ ->
+          []
+      end
+    else
+      []
+    end
+  rescue
+    _ -> []
   end
 
   # -- Resume result classification (Priority 2) --
