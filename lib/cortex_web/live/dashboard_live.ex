@@ -100,7 +100,14 @@ defmodule CortexWeb.DashboardLive do
                   {run.name}
                 </a>
               </td>
-              <td class="px-4 py-3"><.status_badge status={run.status} /></td>
+              <td class="px-4 py-3">
+                <div class="flex items-center gap-2">
+                  <.status_badge status={run.status} />
+                  <span class={["text-xs px-1.5 py-0.5 rounded", mode_class(run.mode)]}>
+                    {run.mode || "orchestration"}
+                  </span>
+                </div>
+              </td>
               <td class="px-4 py-3 text-sm text-gray-300">{run.team_count || 0}</td>
               <td class="px-4 py-3"><.token_display input={run.total_input_tokens} output={run.total_output_tokens} /></td>
               <td class="px-4 py-3"><.duration_display ms={run.total_duration_ms} /></td>
@@ -138,6 +145,9 @@ defmodule CortexWeb.DashboardLive do
   end
 
   defp format_time(_), do: "--"
+
+  defp mode_class("gossip"), do: "bg-purple-900/50 text-purple-300"
+  defp mode_class(_), do: "bg-gray-800/50 text-gray-400"
 
   defp compute_total_tokens(runs) do
     total_input =
