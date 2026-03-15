@@ -26,7 +26,7 @@ defmodule Cortex.Orchestration.Spawner do
   5. Parses NDJSON lines, looking for `"type": "result"` and `"type": "system"`
   6. Returns `{:ok, %TeamResult{}}` on success
   7. Handles timeout by killing the port process
-  8. Returns `{:error, {:exit_code, code}}` on non-zero exit
+  8. Returns `{:error, {:exit_code, code, output}}` on non-zero exit
 
   """
 
@@ -258,6 +258,7 @@ defmodule Cortex.Orchestration.Spawner do
       buffer: "",
       session_id: nil,
       result_line: nil,
+      collected_output: "",
       tokens: %{input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0},
       on_token_update: on_token_update,
       on_activity: on_activity
@@ -287,12 +288,17 @@ defmodule Cortex.Orchestration.Spawner do
           })
         end
 
+        # Keep last 2KB of output for error diagnosis
+        new_collected =
+          String.slice((state.collected_output <> data), -2048, 2048)
+
         collect_loop(port, timer_ref, log_device, %{
           state
           | buffer: new_buffer,
             session_id: new_session_id,
             result_line: new_result_line,
-            tokens: new_tokens
+            tokens: new_tokens,
+            collected_output: new_collected
         })
 
       {^port, {:exit_status, 0}} ->
@@ -302,7 +308,7 @@ defmodule Cortex.Orchestration.Spawner do
         build_team_result(state.team_name, final_session_id, final_result_line)
 
       {^port, {:exit_status, code}} ->
-        {:error, {:exit_code, code}}
+        {:error, {:exit_code, code, state.collected_output}}
 
       {:spawner_timeout, ^port} ->
         kill_port(port)

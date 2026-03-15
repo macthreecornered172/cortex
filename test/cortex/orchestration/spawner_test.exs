@@ -88,7 +88,7 @@ defmodule Cortex.Orchestration.SpawnerTest do
         exit 1
         """)
 
-      assert {:error, {:exit_code, 1}} =
+      assert {:error, {:exit_code, 1, _output}} =
                Spawner.spawn(base_opts(tmp_dir, script))
     end
 
@@ -98,7 +98,7 @@ defmodule Cortex.Orchestration.SpawnerTest do
         exit 42
         """)
 
-      assert {:error, {:exit_code, 42}} =
+      assert {:error, {:exit_code, 42, _output}} =
                Spawner.spawn(base_opts(tmp_dir, script))
     end
   end

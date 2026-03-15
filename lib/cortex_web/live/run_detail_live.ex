@@ -591,6 +591,78 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
+  def handle_event("restart_team", %{"team" => team_name}, socket) do
+    run = socket.assigns.run
+    workspace_path = run && run.workspace_path
+
+    if run && workspace_path do
+      # Get original prompt from DB
+      team_run = Enum.find(socket.assigns.team_runs, &(&1.team_name == team_name))
+
+      if team_run && team_run.prompt do
+        run_id = run.id
+
+        # Build restart context from logs
+        log_path = Path.join([workspace_path, ".cortex", "logs", "#{team_name}.log"])
+
+        restart_context =
+          case Cortex.Orchestration.LogParser.parse(log_path) do
+            {:ok, report} -> Cortex.Orchestration.LogParser.build_restart_context(report)
+            _ -> ""
+          end
+
+        enriched_prompt = team_run.prompt <> "\n\n" <> restart_context
+
+        entry = %{
+          team: "system",
+          text: "Restarting #{team_name} with fresh session (previous session expired)...",
+          kind: :resume,
+          at: format_now()
+        }
+
+        socket = assign(socket, activities: prepend_activity(socket.assigns.activities, entry))
+
+        Task.start(fn ->
+          result =
+            Cortex.Orchestration.Spawner.spawn(
+              team_name: team_name,
+              prompt: enriched_prompt,
+              model: "sonnet",
+              max_turns: 200,
+              permission_mode: "bypassPermissions",
+              timeout_minutes: 45,
+              log_path: log_path,
+              command: "claude",
+              cwd: workspace_path
+            )
+
+          {status, reason} =
+            case result do
+              {:ok, %{status: :success}} -> {:success, "restarted and completed successfully"}
+              {:ok, %{status: :rate_limited}} -> {:rate_limited, "hit rate limit (429)"}
+              {:ok, %{status: status}} -> {:failure, "finished with status: #{status}"}
+              {:error, reason} -> {:failure, inspect(reason)}
+            end
+
+          Cortex.Events.broadcast(:team_resume_result, %{
+            run_id: run_id,
+            team_name: team_name,
+            status: status,
+            reason: reason
+          })
+
+          Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
+        end)
+
+        {:noreply, put_flash(socket, :info, "Restarting #{team_name} with fresh session...")}
+      else
+        {:noreply, put_flash(socket, :error, "No prompt found for #{team_name}")}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "No workspace path — cannot restart")}
+    end
+  end
+
   def handle_event("delete_run", _params, socket) do
     run = socket.assigns.run
 
@@ -1124,24 +1196,35 @@ defmodule CortexWeb.RunDetailLive do
               </div>
             </div>
 
-            <!-- Resume button for this specific team -->
+            <!-- Resume / Restart buttons for this specific team -->
             <div
-              :if={not report.has_result and report.session_id}
+              :if={report.session_id && report.diagnosis not in [:completed]}
               class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4"
             >
               <div class="flex items-center justify-between">
                 <div>
                   <p class="text-sm text-gray-300">
-                    Session <code class="font-mono text-cortex-400">{report.session_id}</code> can be resumed.
+                    Session <code class="font-mono text-cortex-400">{report.session_id}</code>
                   </p>
                 </div>
-                <button
-                  phx-click="resume_single_team"
-                  phx-value-team={@diagnostics_team}
-                  class="rounded bg-cortex-600 px-4 py-2 text-sm font-medium text-white hover:bg-cortex-500 shrink-0"
-                >
-                  Resume {@diagnostics_team}
-                </button>
+                <div class="flex items-center gap-2">
+                  <button
+                    :if={not report.has_result}
+                    phx-click="resume_single_team"
+                    phx-value-team={@diagnostics_team}
+                    class="rounded bg-cortex-600 px-4 py-2 text-sm font-medium text-white hover:bg-cortex-500 shrink-0"
+                  >
+                    Resume
+                  </button>
+                  <button
+                    phx-click="restart_team"
+                    phx-value-team={@diagnostics_team}
+                    class="rounded bg-yellow-600 px-4 py-2 text-sm font-medium text-white hover:bg-yellow-500 shrink-0"
+                    title="Start fresh session with context from previous run"
+                  >
+                    Restart
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1647,12 +1730,16 @@ defmodule CortexWeb.RunDetailLive do
   defp diag_banner_class(:log_ends_without_result),
     do: "bg-red-950/30 border-red-800 text-red-300"
 
+  defp diag_banner_class(:error_during_execution),
+    do: "bg-red-950/30 border-red-800 text-red-300"
+
   defp diag_banner_class(_), do: "bg-gray-900 border-gray-800 text-gray-300"
 
   defp diag_icon(:completed), do: "OK"
   defp diag_icon(:max_turns), do: "!!"
   defp diag_icon(:empty_log), do: "XX"
   defp diag_icon(:no_session), do: "XX"
+  defp diag_icon(:error_during_execution), do: "!!"
   defp diag_icon(:died_during_tool), do: "!!"
   defp diag_icon(:died_after_tool_result), do: "!!"
   defp diag_icon(:log_ends_without_result), do: "!!"
@@ -1662,6 +1749,7 @@ defmodule CortexWeb.RunDetailLive do
   defp diag_title(:max_turns), do: "Hit Max Turns"
   defp diag_title(:empty_log), do: "Empty Log — Never Started"
   defp diag_title(:no_session), do: "No Session — Crashed on Startup"
+  defp diag_title(:error_during_execution), do: "Error During Execution"
   defp diag_title(:died_during_tool), do: "Died During Tool Execution"
   defp diag_title(:died_after_tool_result), do: "Died After Tool Result"
   defp diag_title(:log_ends_without_result), do: "Log Ends Without Result"

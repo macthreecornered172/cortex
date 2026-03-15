@@ -108,6 +108,67 @@ defmodule Cortex.Orchestration.LogParser do
     }
   end
 
+  @doc """
+  Builds a context string summarizing what a previous session accomplished,
+  suitable for injecting into a restart prompt.
+
+  Extracts tool calls, files read/written, and the last action from the report.
+  """
+  @spec build_restart_context(report()) :: String.t()
+  def build_restart_context(report) do
+    lines = ["## Previous Session Context", ""]
+
+    lines =
+      if report.session_id do
+        lines ++ ["Previous session `#{report.session_id}` has expired and cannot be resumed.", ""]
+      else
+        lines ++ ["Previous session data was recovered from logs.", ""]
+      end
+
+    # Summarize what tools were used and what files were touched
+    tool_actions =
+      report.entries
+      |> Enum.filter(&(&1.type in [:tool_use, :tool_start]))
+      |> Enum.map(fn entry ->
+        tool = List.first(entry.tools) || "unknown"
+        "- #{tool}: #{entry.detail}"
+      end)
+
+    lines =
+      if tool_actions != [] do
+        lines ++
+          ["### Actions taken in previous session:"] ++
+          tool_actions ++ [""]
+      else
+        lines ++ ["No tool actions were recorded in the previous session.", ""]
+      end
+
+    # Add the diagnosis
+    lines =
+      lines ++
+        ["### How the previous session ended:", "#{report.diagnosis_detail}", ""]
+
+    # Add any result text
+    lines =
+      if report.result_text do
+        lines ++ ["### Last output:", report.result_text, ""]
+      else
+        lines
+      end
+
+    lines =
+      lines ++
+        [
+          "### Instructions:",
+          "Continue the work from where the previous session left off.",
+          "Check what files already exist before recreating them.",
+          "Do NOT redo work that was already completed.",
+          ""
+        ]
+
+    Enum.join(lines, "\n")
+  end
+
   # -- Internal State --
 
   defp initial_state do
@@ -380,8 +441,21 @@ defmodule Cortex.Orchestration.LogParser do
       state.has_result and state.exit_subtype == "error_max_turns" ->
         %{code: :max_turns, detail: "Hit max turns limit"}
 
+      state.has_result and state.exit_subtype == "error_during_execution" ->
+        error_detail = extract_error_detail(state.result_text)
+        %{code: :error_during_execution, detail: "Error during execution: #{error_detail}"}
+
       state.has_result ->
-        %{code: :exited, detail: "Exited with subtype: #{state.exit_subtype}"}
+        error_detail = extract_error_detail(state.result_text)
+
+        detail =
+          if error_detail != "" do
+            "Exited (#{state.exit_subtype}): #{error_detail}"
+          else
+            "Exited with subtype: #{state.exit_subtype}"
+          end
+
+        %{code: :exited, detail: detail}
 
       entries == [] ->
         %{code: :empty_log, detail: "Log file is empty — process may have never started"}
@@ -407,6 +481,31 @@ defmodule Cortex.Orchestration.LogParser do
           code: :log_ends_without_result,
           detail: "Log ends without a result line — process exited without completing"
         }
+    end
+  end
+
+  defp extract_error_detail(nil), do: ""
+
+  defp extract_error_detail(text) when is_binary(text) do
+    # Try to pull a meaningful error message from result text
+    cond do
+      String.contains?(text, "conversation not found") ->
+        "session expired (conversation not found)"
+
+      String.contains?(text, "rate_limit_error") ->
+        "rate limited (429)"
+
+      String.contains?(text, "overloaded_error") ->
+        "API overloaded"
+
+      String.contains?(text, "authentication_error") ->
+        "authentication failed"
+
+      String.length(text) > 0 ->
+        text |> String.split("\n") |> hd() |> truncate(150)
+
+      true ->
+        ""
     end
   end
 

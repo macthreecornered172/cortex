@@ -120,6 +120,87 @@ defmodule CortexWeb.TeamDetailLive do
     end
   end
 
+  def handle_event("mark_failed", _params, socket) do
+    team_run = socket.assigns.team_run
+
+    if team_run do
+      case Cortex.Store.update_team_run(team_run, %{
+             status: "failed",
+             result_summary: "Manually marked as failed — session died without completing",
+             completed_at: DateTime.utc_now()
+           }) do
+        {:ok, updated} ->
+          diagnostics = load_diagnostics(socket.assigns.run, updated)
+
+          {:noreply,
+           socket
+           |> assign(team_run: updated, diagnostics: diagnostics)
+           |> put_flash(:info, "Team marked as failed")}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "Failed to update team status")}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("restart_team", _params, socket) do
+    run = socket.assigns.run
+    team_name = socket.assigns.team_name
+    team_run = socket.assigns.team_run
+    workspace_path = run && run.workspace_path
+
+    if workspace_path && team_run && team_run.prompt do
+      run_id = run.id
+      log_path = Path.join([workspace_path, ".cortex", "logs", "#{team_name}.log"])
+
+      restart_context =
+        case Cortex.Orchestration.LogParser.parse(log_path) do
+          {:ok, report} -> Cortex.Orchestration.LogParser.build_restart_context(report)
+          _ -> ""
+        end
+
+      enriched_prompt = team_run.prompt <> "\n\n" <> restart_context
+
+      Task.start(fn ->
+        result =
+          Cortex.Orchestration.Spawner.spawn(
+            team_name: team_name,
+            prompt: enriched_prompt,
+            model: "sonnet",
+            max_turns: 200,
+            permission_mode: "bypassPermissions",
+            timeout_minutes: 45,
+            log_path: log_path,
+            command: "claude",
+            cwd: workspace_path
+          )
+
+        {status, reason} =
+          case result do
+            {:ok, %{status: :success}} -> {:success, "restarted and completed successfully"}
+            {:ok, %{status: :rate_limited}} -> {:rate_limited, "hit rate limit (429)"}
+            {:ok, %{status: status}} -> {:failure, "finished with status: #{status}"}
+            {:error, reason} -> {:failure, inspect(reason)}
+          end
+
+        Cortex.Events.broadcast(:team_resume_result, %{
+          run_id: run_id,
+          team_name: team_name,
+          status: status,
+          reason: reason
+        })
+
+        Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
+      end)
+
+      {:noreply, put_flash(socket, :info, "Restarting #{team_name} with fresh session...")}
+    else
+      {:noreply, put_flash(socket, :error, "No prompt or workspace path — cannot restart")}
+    end
+  end
+
   @impl true
   def handle_info(%{type: type, payload: _payload}, socket)
       when type in [:team_completed, :tier_completed, :run_completed, :run_resumed] do
@@ -165,7 +246,7 @@ defmodule CortexWeb.TeamDetailLive do
     </.header>
 
     <!-- Resume Banner (for stalled/running teams with a session to resume) -->
-    <%= if @team_run && (@team_run.status || "pending") == "running" && @diagnostics do %>
+    <%= if @team_run && (@team_run.status || "pending") in ["running", "failed"] && @diagnostics && @diagnostics.session_id do %>
       <div class={[
         "rounded-lg border p-4 mb-6",
         if(@diagnostics.has_result, do: "bg-gray-900 border-gray-800", else: "bg-yellow-900/30 border-yellow-800")
@@ -184,14 +265,41 @@ defmodule CortexWeb.TeamDetailLive do
                 | Tokens: {format_token_count(@diagnostics.total_input_tokens)} in / {format_token_count(@diagnostics.total_output_tokens)} out
               <% end %>
             </p>
+            <p :if={@diagnostics.diagnosis not in [:completed]} class="text-xs text-gray-500 mt-1">
+              <%= if not @diagnostics.has_result do %>
+                <strong>Resume</strong> continues the existing session.
+                <strong>Restart</strong> starts fresh with context from previous progress.
+                If the session expired, Resume will fail — use Restart instead.
+              <% else %>
+                Session ended with an error. <strong>Restart</strong> starts fresh with context from previous progress.
+              <% end %>
+            </p>
           </div>
-          <button
-            :if={@diagnostics.session_id && not @diagnostics.has_result}
-            phx-click="resume_team"
-            class="rounded bg-yellow-600 px-4 py-2 text-sm font-medium text-white hover:bg-yellow-500 shrink-0"
-          >
-            Resume {@team_name}
-          </button>
+          <div :if={@diagnostics.diagnosis not in [:completed]} class="flex items-center gap-2">
+            <button
+              :if={not @diagnostics.has_result}
+              phx-click="resume_team"
+              class="rounded bg-cortex-600 px-4 py-2 text-sm font-medium text-white hover:bg-cortex-500 shrink-0"
+            >
+              Resume
+            </button>
+            <button
+              phx-click="restart_team"
+              class="rounded bg-yellow-600 px-4 py-2 text-sm font-medium text-white hover:bg-yellow-500 shrink-0"
+              title="Start fresh session with context from previous run"
+            >
+              Restart
+            </button>
+            <button
+              :if={(@team_run.status || "pending") == "running"}
+              phx-click="mark_failed"
+              data-confirm="Mark this team as failed?"
+              class="rounded bg-red-700 px-4 py-2 text-sm font-medium text-white hover:bg-red-600 shrink-0"
+              title="Update DB status to failed"
+            >
+              Mark Failed
+            </button>
+          </div>
         </div>
       </div>
     <% end %>
