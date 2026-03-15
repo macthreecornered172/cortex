@@ -664,7 +664,14 @@ defmodule CortexWeb.GossipLive do
           is_selected = node.name == selected
           is_peer = node.name in selected_peers
 
-          %{name: node.name, x: x, y: y, status: node.status, selected: is_selected, peer: is_peer}
+          %{
+            name: node.name,
+            x: x,
+            y: y,
+            status: node.status,
+            selected: is_selected,
+            peer: is_peer
+          }
         end)
 
       assigns = assign(assigns, edges: edges, node_circles: node_circles)

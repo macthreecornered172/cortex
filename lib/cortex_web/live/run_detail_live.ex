@@ -5,6 +5,8 @@ defmodule CortexWeb.RunDetailLive do
 
   alias Cortex.Orchestration.DAG
 
+  alias Cortex.Orchestration.LogParser
+
   @max_activities 150
   @stale_threshold_seconds 300
   @max_log_lines 500
@@ -34,7 +36,10 @@ defmodule CortexWeb.RunDetailLive do
            expanded_logs: MapSet.new(),
            messages_team: nil,
            team_inbox: [],
-           team_outbox: []
+           team_outbox: [],
+           diagnostics_team: nil,
+           diagnostics_report: nil,
+           run_summary: nil
          )}
 
       run ->
@@ -64,7 +69,10 @@ defmodule CortexWeb.RunDetailLive do
            expanded_logs: MapSet.new(),
            messages_team: nil,
            team_inbox: [],
-           team_outbox: []
+           team_outbox: [],
+           diagnostics_team: nil,
+           diagnostics_report: nil,
+           run_summary: nil
          )}
     end
   end
@@ -289,6 +297,31 @@ defmodule CortexWeb.RunDetailLive do
     {:noreply, assign(socket, current_tab: "messages")}
   end
 
+  def handle_event("switch_tab", %{"tab" => "diagnostics"}, socket) do
+    socket =
+      cond do
+        socket.assigns.diagnostics_team ->
+          report = load_diagnostics(socket.assigns.run, socket.assigns.diagnostics_team)
+          assign(socket, diagnostics_report: report)
+
+        socket.assigns.team_names != [] ->
+          # Auto-select first running/stalled team, or first team
+          first =
+            Enum.find(socket.assigns.team_runs, fn tr ->
+              (tr.status || "pending") == "running"
+            end)
+
+          first_name = if first, do: first.team_name, else: hd(socket.assigns.team_names)
+          report = load_diagnostics(socket.assigns.run, first_name)
+          assign(socket, diagnostics_team: first_name, diagnostics_report: report)
+
+        true ->
+          socket
+      end
+
+    {:noreply, assign(socket, current_tab: "diagnostics")}
+  end
+
   def handle_event("switch_tab", %{"tab" => tab}, socket) do
     {:noreply, assign(socket, current_tab: tab)}
   end
@@ -296,13 +329,16 @@ defmodule CortexWeb.RunDetailLive do
   # -- Event handlers: log team selection --
 
   def handle_event("select_log_team", %{"team" => ""}, socket) do
-    {:noreply, assign(socket, selected_log_team: nil, log_lines: nil, expanded_logs: MapSet.new())}
+    {:noreply,
+     assign(socket, selected_log_team: nil, log_lines: nil, expanded_logs: MapSet.new())}
   end
 
   def handle_event("select_log_team", %{"team" => team_name}, socket) do
     log_lines = read_team_log(socket.assigns.run, team_name)
     sorted = sort_log_lines(log_lines, socket.assigns.log_sort)
-    {:noreply, assign(socket, selected_log_team: team_name, log_lines: sorted, expanded_logs: MapSet.new())}
+
+    {:noreply,
+     assign(socket, selected_log_team: team_name, log_lines: sorted, expanded_logs: MapSet.new())}
   end
 
   def handle_event("refresh_logs", _params, socket) do
@@ -337,6 +373,26 @@ defmodule CortexWeb.RunDetailLive do
       end
 
     {:noreply, assign(socket, expanded_logs: expanded)}
+  end
+
+  # -- Event handlers: diagnostics team selection --
+
+  def handle_event("select_diag_team", %{"team" => ""}, socket) do
+    {:noreply, assign(socket, diagnostics_team: nil, diagnostics_report: nil)}
+  end
+
+  def handle_event("select_diag_team", %{"team" => team_name}, socket) do
+    report = load_diagnostics(socket.assigns.run, team_name)
+    {:noreply, assign(socket, diagnostics_team: team_name, diagnostics_report: report)}
+  end
+
+  def handle_event("refresh_diagnostics", _params, socket) do
+    if socket.assigns.diagnostics_team do
+      report = load_diagnostics(socket.assigns.run, socket.assigns.diagnostics_team)
+      {:noreply, assign(socket, diagnostics_report: report)}
+    else
+      {:noreply, socket}
+    end
   end
 
   # -- Event handlers: messages team selection --
@@ -471,6 +527,70 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
+  def handle_event("resume_single_team", %{"team" => team_name}, socket) do
+    run = socket.assigns.run
+    workspace_path = run.workspace_path || non_empty(socket.assigns.resume_workspace_path)
+
+    if run && workspace_path do
+      if run.workspace_path == nil do
+        safe_update_workspace(run, workspace_path)
+      end
+
+      entry = %{
+        team: "system",
+        text: "Resuming #{team_name} at #{workspace_path}...",
+        kind: :resume,
+        at: format_now()
+      }
+
+      socket = assign(socket, activities: prepend_activity(socket.assigns.activities, entry))
+      run_id = run.id
+
+      Task.start(fn ->
+        # Build a minimal workspace to find session_id and resume just this team
+        cortex_path = Path.join(workspace_path, ".cortex")
+        log_path = Path.join([cortex_path, "logs", "#{team_name}.log"])
+
+        session_id =
+          case Cortex.Orchestration.Spawner.extract_session_id_from_log(log_path) do
+            {:ok, sid} -> sid
+            :error -> nil
+          end
+
+        {status, reason} =
+          if session_id do
+            case Cortex.Orchestration.Spawner.resume(
+                   team_name: team_name,
+                   session_id: session_id,
+                   timeout_minutes: 30,
+                   log_path: log_path,
+                   command: "claude",
+                   cwd: workspace_path
+                 ) do
+              {:ok, %{status: :success}} -> {:success, "session resumed successfully"}
+              {:ok, %{status: :rate_limited}} -> {:rate_limited, "hit rate limit (429)"}
+              {:error, reason} -> {:failure, inspect(reason)}
+            end
+          else
+            {:no_session_id, "no session_id found in logs"}
+          end
+
+        Cortex.Events.broadcast(:team_resume_result, %{
+          run_id: run_id,
+          team_name: team_name,
+          status: status,
+          reason: reason
+        })
+
+        Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
+      end)
+
+      {:noreply, put_flash(socket, :info, "Resuming #{team_name}...")}
+    else
+      {:noreply, put_flash(socket, :error, "No workspace path — cannot resume")}
+    end
+  end
+
   def handle_event("delete_run", _params, socket) do
     run = socket.assigns.run
 
@@ -488,6 +608,13 @@ defmodule CortexWeb.RunDetailLive do
     else
       {:noreply, socket}
     end
+  end
+
+  def handle_event("generate_summary", _params, socket) do
+    summary =
+      build_run_summary(socket.assigns.run, socket.assigns.team_runs, socket.assigns.last_seen)
+
+    {:noreply, assign(socket, run_summary: summary)}
   end
 
   def handle_event("form_update", params, socket) do
@@ -546,14 +673,17 @@ defmodule CortexWeb.RunDetailLive do
             <div>
               <p class="text-yellow-300 font-medium">Stalled teams detected</p>
               <p class="text-yellow-200/70 text-sm">
-                {count_stalled(@team_runs, @last_seen)} team(s) show as "running" but have not sent events in over 10 minutes. You can resume their sessions.
+                {count_stalled(@team_runs, @last_seen)} team(s) show as "running" but have not sent events in over {div(@stale_threshold_seconds, 60)} minutes:
+                <span class="font-mono">
+                  {stalled_team_names(@team_runs, @last_seen) |> Enum.join(", ")}
+                </span>
               </p>
             </div>
             <button
               phx-click="resume_dead_teams"
               class="rounded bg-yellow-600 px-4 py-2 text-sm font-medium text-white hover:bg-yellow-500 shrink-0"
             >
-              Resume Stalled Teams
+              Resume All Stalled
             </button>
           </div>
           <%= unless @run.workspace_path do %>
@@ -574,7 +704,7 @@ defmodule CortexWeb.RunDetailLive do
       <!-- Tab Bar -->
       <div class="flex border-b border-gray-800 mb-6">
         <button
-          :for={tab <- ~w(overview activity messages logs)}
+          :for={tab <- ~w(overview activity messages logs diagnostics)}
           phx-click="switch_tab"
           phx-value-tab={tab}
           class={[
@@ -613,6 +743,24 @@ defmodule CortexWeb.RunDetailLive do
             <p class="text-xs text-red-400 uppercase">Failed</p>
             <p class="text-lg font-bold text-red-300">{count_by_status(@team_runs, "failed")}</p>
           </div>
+        </div>
+
+        <!-- On-demand Run Summary -->
+        <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Run Summary</h2>
+            <button
+              phx-click="generate_summary"
+              class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
+            >
+              {if @run_summary, do: "Refresh", else: "Generate"}
+            </button>
+          </div>
+          <%= if @run_summary do %>
+            <pre class="text-gray-300 text-sm font-mono whitespace-pre overflow-x-auto bg-gray-950 rounded p-3">{@run_summary}</pre>
+          <% else %>
+            <p class="text-gray-500 text-sm">Click Generate to build a summary of current run state.</p>
+          <% end %>
         </div>
 
         <!-- DAG Visualization -->
@@ -662,6 +810,14 @@ defmodule CortexWeb.RunDetailLive do
                 <span class="text-gray-500">Tier {team.tier || 0}</span>
                 <.token_display input={team.input_tokens} output={team.output_tokens} />
                 <.duration_display ms={team.duration_ms} />
+              </div>
+              <div
+                :if={(team.status || "pending") == "running"}
+                class="mt-2 text-xs"
+              >
+                <span class={health_indicator_class(team, @last_seen)}>
+                  {health_indicator_text(team, @last_seen)}
+                </span>
               </div>
             </a>
           </div>
@@ -914,6 +1070,139 @@ defmodule CortexWeb.RunDetailLive do
           </div>
         <% end %>
       </div>
+
+      <!-- ============ Diagnostics Tab ============ -->
+      <div :if={@current_tab == "diagnostics"}>
+        <%= if @run.workspace_path do %>
+          <!-- Team Selector + Refresh -->
+          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4">
+            <div class="flex items-center gap-3">
+              <label class="text-sm text-gray-400 shrink-0">Team:</label>
+              <form phx-change="select_diag_team" class="flex-1">
+                <select
+                  name="team"
+                  class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
+                >
+                  <option value="">Select team...</option>
+                  <option :for={name <- @team_names} value={name} selected={name == @diagnostics_team}>
+                    {name}
+                  </option>
+                </select>
+              </form>
+              <button
+                :if={@diagnostics_team}
+                phx-click="refresh_diagnostics"
+                class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
+              >
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          <%= if @diagnostics_team && @diagnostics_report do %>
+            <% report = @diagnostics_report %>
+            <!-- Diagnosis Banner -->
+            <div class={[
+              "rounded-lg border p-4 mb-4",
+              diag_banner_class(report.diagnosis)
+            ]}>
+              <div class="flex items-center gap-3">
+                <span class="text-lg">{diag_icon(report.diagnosis)}</span>
+                <div>
+                  <p class="font-medium">{diag_title(report.diagnosis)}</p>
+                  <p class="text-sm opacity-80">{report.diagnosis_detail}</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-4 mt-3 text-sm opacity-70 flex-wrap">
+                <span :if={report.session_id}>Session: <code class="font-mono">{report.session_id}</code></span>
+                <span :if={report.model}>Model: {report.model}</span>
+                <span :if={report.cost_usd}>Cost: ${Float.round(report.cost_usd * 1.0, 4)}</span>
+                <span :if={report.total_input_tokens > 0 or report.total_output_tokens > 0}>
+                  Tokens: {format_token_count(report.total_input_tokens)} in / {format_token_count(report.total_output_tokens)} out
+                </span>
+                <span>{report.line_count} log lines</span>
+              </div>
+            </div>
+
+            <!-- Resume button for this specific team -->
+            <div
+              :if={not report.has_result and report.session_id}
+              class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4"
+            >
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="text-sm text-gray-300">
+                    Session <code class="font-mono text-cortex-400">{report.session_id}</code> can be resumed.
+                  </p>
+                </div>
+                <button
+                  phx-click="resume_single_team"
+                  phx-value-team={@diagnostics_team}
+                  class="rounded bg-cortex-600 px-4 py-2 text-sm font-medium text-white hover:bg-cortex-500 shrink-0"
+                >
+                  Resume {@diagnostics_team}
+                </button>
+              </div>
+            </div>
+
+            <!-- Result Summary (if exists) -->
+            <div :if={report.result_text} class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4">
+              <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-2">Result</h3>
+              <pre class="text-gray-300 text-sm whitespace-pre-wrap">{report.result_text}</pre>
+            </div>
+
+            <!-- Timeline -->
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+              <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Event Timeline</h3>
+                <span class="text-xs text-gray-600">{length(report.entries)} events</span>
+              </div>
+              <%= if report.entries == [] do %>
+                <p class="text-gray-500 text-sm">No events found in log.</p>
+              <% else %>
+                <div class="space-y-0.5 max-h-[70vh] overflow-y-auto">
+                  <div
+                    :for={entry <- report.entries}
+                    class="flex items-start gap-2 text-sm py-1.5 px-2 rounded hover:bg-gray-800/50"
+                  >
+                    <span class={[
+                      "shrink-0 rounded px-1.5 py-0.5 text-xs font-medium w-20 text-center",
+                      diag_entry_class(entry.type)
+                    ]}>
+                      {diag_entry_label(entry.type)}
+                    </span>
+                    <span :if={entry.tools != []} class="text-cortex-400 font-medium shrink-0">
+                      {Enum.join(entry.tools, ", ")}
+                    </span>
+                    <span class="text-gray-300 break-all">{entry.detail}</span>
+                    <span :if={entry.timestamp} class="text-gray-600 text-xs shrink-0 ml-auto">
+                      {format_iso_time(entry.timestamp)}
+                    </span>
+                  </div>
+
+                  <!-- End-of-log marker for incomplete sessions -->
+                  <div :if={not report.has_result} class="flex items-start gap-2 text-sm py-2 px-2 mt-2 rounded bg-red-950/30 border border-red-900/50">
+                    <span class="shrink-0 rounded px-1.5 py-0.5 text-xs font-medium w-20 text-center bg-red-900/60 text-red-300">
+                      END
+                    </span>
+                    <span class="text-red-300">
+                      Log ends here — no result line received. Process died or was killed.
+                    </span>
+                  </div>
+                </div>
+              <% end %>
+            </div>
+          <% else %>
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
+              <p class="text-gray-500 text-sm">Select a team to view diagnostics.</p>
+            </div>
+          <% end %>
+        <% else %>
+          <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
+            <p class="text-gray-500">No workspace path available. Diagnostics require a workspace with .cortex/logs/ directory.</p>
+          </div>
+        <% end %>
+      </div>
     <% end %>
     """
   end
@@ -1034,6 +1323,7 @@ defmodule CortexWeb.RunDetailLive do
 
   defp tab_label("messages", _assigns), do: "Messages"
   defp tab_label("logs", _assigns), do: "Logs"
+  defp tab_label("diagnostics", _assigns), do: "Diagnostics"
   defp tab_label(tab, _assigns), do: String.capitalize(tab)
 
   # -- Stalled detection (Priority 3) --
@@ -1046,8 +1336,15 @@ defmodule CortexWeb.RunDetailLive do
   defp team_stalled?(team_run, last_seen) do
     (team_run.status || "pending") == "running" and
       case Map.get(last_seen, team_run.team_name) do
-        nil -> false
-        ts -> DateTime.diff(DateTime.utc_now(), ts, :second) > @stale_threshold_seconds
+        nil ->
+          # No events received this session — fall back to started_at
+          case team_run.started_at do
+            nil -> true
+            ts -> DateTime.diff(DateTime.utc_now(), ts, :second) > @stale_threshold_seconds
+          end
+
+        ts ->
+          DateTime.diff(DateTime.utc_now(), ts, :second) > @stale_threshold_seconds
       end
   end
 
@@ -1069,6 +1366,13 @@ defmodule CortexWeb.RunDetailLive do
     Enum.count(team_runs, fn tr ->
       (tr.status || "pending") == "running" and not team_stalled?(tr, last_seen)
     end)
+  end
+
+  defp stalled_team_names(team_runs, last_seen) do
+    team_runs
+    |> Enum.filter(fn tr -> team_stalled?(tr, last_seen) end)
+    |> Enum.map(& &1.team_name)
+    |> Enum.sort()
   end
 
   # -- Resume result classification (Priority 2) --
@@ -1223,5 +1527,235 @@ defmodule CortexWeb.RunDetailLive do
     end
   rescue
     _ -> :ok
+  end
+
+  # -- Run summary --
+
+  defp build_run_summary(run, team_runs, last_seen) do
+    now = DateTime.utc_now()
+    started = run.started_at
+
+    wall_clock =
+      if started do
+        seconds = DateTime.diff(now, started, :second)
+        format_duration_seconds(seconds)
+      else
+        "--"
+      end
+
+    total_input = team_runs |> Enum.map(& &1.input_tokens) |> Enum.reject(&is_nil/1) |> Enum.sum()
+
+    total_output =
+      team_runs |> Enum.map(& &1.output_tokens) |> Enum.reject(&is_nil/1) |> Enum.sum()
+
+    total_cost =
+      team_runs
+      |> Enum.map(&(&1.cost_usd || 0.0))
+      |> Enum.sum()
+
+    # Build per-team lines
+    team_lines =
+      team_runs
+      |> Enum.sort_by(&{&1.tier || 0, &1.team_name})
+      |> Enum.map(fn tr ->
+        status = display_status(tr, last_seen)
+
+        health =
+          if status == "running" do
+            " (#{health_indicator_text(tr, last_seen)})"
+          else
+            ""
+          end
+
+        tokens =
+          if tr.input_tokens || tr.output_tokens do
+            " | #{format_token_count(tr.input_tokens || 0)} in / #{format_token_count(tr.output_tokens || 0)} out"
+          else
+            ""
+          end
+
+        cost =
+          if tr.cost_usd && tr.cost_usd > 0 do
+            " | $#{Float.round(tr.cost_usd * 1.0, 4)}"
+          else
+            ""
+          end
+
+        diag =
+          if status in ["running", "stalled"] and run.workspace_path do
+            case load_diagnostics(run, tr.team_name) do
+              nil -> ""
+              report -> " | #{report.diagnosis_detail}"
+            end
+          else
+            ""
+          end
+
+        result_snippet =
+          if tr.result_summary do
+            snippet = tr.result_summary |> String.split("\n") |> hd() |> String.slice(0, 80)
+            "\n    Result: #{snippet}"
+          else
+            ""
+          end
+
+        "  [T#{tr.tier || 0}] #{tr.team_name}: #{status}#{health}#{tokens}#{cost}#{diag}#{result_snippet}"
+      end)
+
+    lines =
+      [
+        "=== #{run.name || "Untitled"} ===",
+        "Status: #{run.status} | Wall clock: #{wall_clock}",
+        "Tokens: #{format_token_count(total_input)} in / #{format_token_count(total_output)} out | Cost: $#{Float.round(total_cost * 1.0, 4)}",
+        "",
+        "Teams:"
+      ] ++ team_lines
+
+    Enum.join(lines, "\n")
+  end
+
+  defp format_duration_seconds(seconds) do
+    cond do
+      seconds < 60 -> "#{seconds}s"
+      seconds < 3600 -> "#{div(seconds, 60)}m #{rem(seconds, 60)}s"
+      true -> "#{div(seconds, 3600)}h #{rem(div(seconds, 60), 60)}m"
+    end
+  end
+
+  # -- Diagnostics helpers --
+
+  defp load_diagnostics(run, team_name) do
+    if run && run.workspace_path do
+      log_path = Path.join([run.workspace_path, ".cortex", "logs", "#{team_name}.log"])
+
+      case LogParser.parse(log_path) do
+        {:ok, report} -> report
+        {:error, _} -> nil
+      end
+    end
+  end
+
+  defp diag_banner_class(:completed), do: "bg-green-950/30 border-green-800 text-green-300"
+  defp diag_banner_class(:max_turns), do: "bg-yellow-950/30 border-yellow-800 text-yellow-300"
+  defp diag_banner_class(:empty_log), do: "bg-red-950/30 border-red-800 text-red-300"
+  defp diag_banner_class(:no_session), do: "bg-red-950/30 border-red-800 text-red-300"
+  defp diag_banner_class(:died_during_tool), do: "bg-red-950/30 border-red-800 text-red-300"
+
+  defp diag_banner_class(:died_after_tool_result),
+    do: "bg-red-950/30 border-red-800 text-red-300"
+
+  defp diag_banner_class(:log_ends_without_result),
+    do: "bg-red-950/30 border-red-800 text-red-300"
+
+  defp diag_banner_class(_), do: "bg-gray-900 border-gray-800 text-gray-300"
+
+  defp diag_icon(:completed), do: "OK"
+  defp diag_icon(:max_turns), do: "!!"
+  defp diag_icon(:empty_log), do: "XX"
+  defp diag_icon(:no_session), do: "XX"
+  defp diag_icon(:died_during_tool), do: "!!"
+  defp diag_icon(:died_after_tool_result), do: "!!"
+  defp diag_icon(:log_ends_without_result), do: "!!"
+  defp diag_icon(_), do: "??"
+
+  defp diag_title(:completed), do: "Completed Successfully"
+  defp diag_title(:max_turns), do: "Hit Max Turns"
+  defp diag_title(:empty_log), do: "Empty Log — Never Started"
+  defp diag_title(:no_session), do: "No Session — Crashed on Startup"
+  defp diag_title(:died_during_tool), do: "Died During Tool Execution"
+  defp diag_title(:died_after_tool_result), do: "Died After Tool Result"
+  defp diag_title(:log_ends_without_result), do: "Log Ends Without Result"
+  defp diag_title(:exited), do: "Exited with Error"
+  defp diag_title(_), do: "Unknown Status"
+
+  defp diag_entry_class(:session_start), do: "bg-purple-900/60 text-purple-300"
+  defp diag_entry_class(:thinking), do: "bg-gray-800/60 text-gray-400"
+  defp diag_entry_class(:text), do: "bg-blue-900/60 text-blue-300"
+  defp diag_entry_class(:tool_use), do: "bg-green-900/60 text-green-300"
+  defp diag_entry_class(:tool_start), do: "bg-green-900/60 text-green-300"
+  defp diag_entry_class(:tool_result), do: "bg-emerald-900/60 text-emerald-300"
+  defp diag_entry_class(:tool_error), do: "bg-red-900/60 text-red-300"
+  defp diag_entry_class(:result), do: "bg-cyan-900/60 text-cyan-300"
+  defp diag_entry_class(:end_turn), do: "bg-gray-800/60 text-gray-400"
+  defp diag_entry_class(:parse_error), do: "bg-red-900/60 text-red-300"
+  defp diag_entry_class(_), do: "bg-gray-800/60 text-gray-400"
+
+  defp diag_entry_label(:session_start), do: "session"
+  defp diag_entry_label(:thinking), do: "thinking"
+  defp diag_entry_label(:text), do: "text"
+  defp diag_entry_label(:tool_use), do: "tool"
+  defp diag_entry_label(:tool_start), do: "tool"
+  defp diag_entry_label(:tool_result), do: "result"
+  defp diag_entry_label(:tool_error), do: "error"
+  defp diag_entry_label(:result), do: "done"
+  defp diag_entry_label(:end_turn), do: "end"
+  defp diag_entry_label(:parse_error), do: "parse err"
+  defp diag_entry_label(type), do: Atom.to_string(type)
+
+  defp format_iso_time(nil), do: ""
+
+  defp format_iso_time(iso_string) do
+    case DateTime.from_iso8601(iso_string) do
+      {:ok, dt, _} -> Calendar.strftime(dt, "%H:%M:%S")
+      _ -> iso_string
+    end
+  end
+
+  # -- Per-team health indicators --
+
+  defp health_indicator_text(team, last_seen) do
+    case Map.get(last_seen, team.team_name) do
+      nil ->
+        case team.started_at do
+          nil -> "no events"
+          ts -> "started #{time_ago(ts)}, no events received"
+        end
+
+      ts ->
+        "last event #{time_ago(ts)}"
+    end
+  end
+
+  defp health_indicator_class(team, last_seen) do
+    seconds =
+      case Map.get(last_seen, team.team_name) do
+        nil ->
+          case team.started_at do
+            nil -> 999_999
+            ts -> DateTime.diff(DateTime.utc_now(), ts, :second)
+          end
+
+        ts ->
+          DateTime.diff(DateTime.utc_now(), ts, :second)
+      end
+
+    cond do
+      seconds < 60 -> "text-green-400"
+      seconds < @stale_threshold_seconds -> "text-yellow-400"
+      true -> "text-red-400"
+    end
+  end
+
+  defp format_token_count(nil), do: "0"
+  defp format_token_count(0), do: "0"
+
+  defp format_token_count(n) when n >= 1_000_000 do
+    "#{Float.round(n / 1_000_000, 1)}M"
+  end
+
+  defp format_token_count(n) when n >= 1_000 do
+    "#{Float.round(n / 1_000, 1)}K"
+  end
+
+  defp format_token_count(n), do: to_string(n)
+
+  defp time_ago(datetime) do
+    seconds = DateTime.diff(DateTime.utc_now(), datetime, :second)
+
+    cond do
+      seconds < 60 -> "#{seconds}s ago"
+      seconds < 3600 -> "#{div(seconds, 60)}m ago"
+      true -> "#{div(seconds, 3600)}h #{rem(div(seconds, 60), 60)}m ago"
+    end
   end
 end
