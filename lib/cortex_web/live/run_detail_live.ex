@@ -659,7 +659,7 @@ defmodule CortexWeb.RunDetailLive do
             <span class="text-xs text-gray-600">{length(@activities)} events</span>
           </div>
           <%= if @activities == [] do %>
-            <p class="text-gray-500 text-sm">No activity yet. Events will appear here in real-time.</p>
+            <p class="text-gray-500 text-sm">No activity yet. Events appear here in real-time and clear on page reload.</p>
           <% else %>
             <div class="space-y-1 min-h-[60vh] max-h-[80vh] overflow-y-auto" id="activity-feed">
               <div :for={entry <- @activities} class="flex items-start gap-2 text-sm py-1">
@@ -1022,7 +1022,7 @@ defmodule CortexWeb.RunDetailLive do
   defp team_stalled?(team_run, last_seen) do
     (team_run.status || "pending") == "running" and
       case Map.get(last_seen, team_run.team_name) do
-        nil -> true
+        nil -> false
         ts -> DateTime.diff(DateTime.utc_now(), ts, :second) > @stale_threshold_seconds
       end
   end
