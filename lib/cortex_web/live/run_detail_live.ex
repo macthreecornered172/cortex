@@ -601,6 +601,7 @@ defmodule CortexWeb.RunDetailLive do
 
       if team_run && team_run.prompt do
         run_id = run.id
+        team_run_id = team_run.id
 
         # Build restart context from logs
         log_path = Path.join([workspace_path, ".cortex", "logs", "#{team_name}.log"])
@@ -612,6 +613,21 @@ defmodule CortexWeb.RunDetailLive do
           end
 
         enriched_prompt = team_run.prompt <> "\n\n" <> restart_context
+
+        # Mark as running + update prompt in DB
+        safe_store_call(fn ->
+          case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
+            nil -> :ok
+            tr -> Cortex.Store.update_team_run(tr, %{
+              status: "running",
+              prompt: enriched_prompt,
+              started_at: DateTime.utc_now(),
+              completed_at: nil,
+              result_summary: nil,
+              session_id: nil
+            })
+          end
+        end)
 
         entry = %{
           team: "system",
@@ -635,6 +651,31 @@ defmodule CortexWeb.RunDetailLive do
               command: "claude",
               cwd: workspace_path
             )
+
+          # Persist result to DB
+          safe_store_call(fn ->
+            case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
+              nil -> :ok
+              tr ->
+                attrs = case result do
+                  {:ok, %{status: :success} = r} ->
+                    %{status: "completed", session_id: r.session_id, cost_usd: r.cost_usd,
+                      input_tokens: r.input_tokens, output_tokens: r.output_tokens,
+                      cache_read_tokens: r.cache_read_tokens, cache_creation_tokens: r.cache_creation_tokens,
+                      duration_ms: r.duration_ms, num_turns: r.num_turns,
+                      result_summary: truncate_for_store(r.result), completed_at: DateTime.utc_now()}
+                  {:ok, r} ->
+                    %{status: "failed", session_id: r.session_id, cost_usd: r.cost_usd,
+                      input_tokens: r.input_tokens, output_tokens: r.output_tokens,
+                      duration_ms: r.duration_ms, result_summary: truncate_for_store(r.result),
+                      completed_at: DateTime.utc_now()}
+                  {:error, reason} ->
+                    %{status: "failed", result_summary: "Restart error: #{inspect(reason)}",
+                      completed_at: DateTime.utc_now()}
+                end
+                Cortex.Store.update_team_run(tr, attrs)
+            end
+          end)
 
           {status, reason} =
             case result do
@@ -1823,6 +1864,22 @@ defmodule CortexWeb.RunDetailLive do
       true -> "text-red-400"
     end
   end
+
+  defp safe_store_call(fun) do
+    try do
+      fun.()
+    rescue
+      _ -> :ok
+    end
+  end
+
+  defp truncate_for_store(nil), do: nil
+
+  defp truncate_for_store(text) when is_binary(text) do
+    if String.length(text) > 2000, do: String.slice(text, 0, 2000) <> "...", else: text
+  end
+
+  defp truncate_for_store(other), do: inspect(other) |> truncate_for_store()
 
   defp format_token_count(nil), do: "0"
   defp format_token_count(0), do: "0"

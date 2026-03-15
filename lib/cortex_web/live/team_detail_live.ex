@@ -153,6 +153,7 @@ defmodule CortexWeb.TeamDetailLive do
 
     if workspace_path && team_run && team_run.prompt do
       run_id = run.id
+      team_run_id = team_run.id
       log_path = Path.join([workspace_path, ".cortex", "logs", "#{team_name}.log"])
 
       restart_context =
@@ -162,6 +163,16 @@ defmodule CortexWeb.TeamDetailLive do
         end
 
       enriched_prompt = team_run.prompt <> "\n\n" <> restart_context
+
+      # Mark as running + update prompt in DB
+      Cortex.Store.update_team_run(team_run, %{
+        status: "running",
+        prompt: enriched_prompt,
+        started_at: DateTime.utc_now(),
+        completed_at: nil,
+        result_summary: nil,
+        session_id: nil
+      })
 
       Task.start(fn ->
         result =
@@ -176,6 +187,9 @@ defmodule CortexWeb.TeamDetailLive do
             command: "claude",
             cwd: workspace_path
           )
+
+        # Persist result to DB
+        persist_restart_result(team_run_id, result)
 
         {status, reason} =
           case result do
@@ -606,6 +620,63 @@ defmodule CortexWeb.TeamDetailLive do
       end
     end
   end
+
+  defp persist_restart_result(team_run_id, result) do
+    case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
+      nil ->
+        :ok
+
+      team_run ->
+        attrs =
+          case result do
+            {:ok, %{status: :success} = tr} ->
+              %{
+                status: "completed",
+                session_id: tr.session_id,
+                cost_usd: tr.cost_usd,
+                input_tokens: tr.input_tokens,
+                output_tokens: tr.output_tokens,
+                cache_read_tokens: tr.cache_read_tokens,
+                cache_creation_tokens: tr.cache_creation_tokens,
+                duration_ms: tr.duration_ms,
+                num_turns: tr.num_turns,
+                result_summary: truncate_summary(tr.result),
+                completed_at: DateTime.utc_now()
+              }
+
+            {:ok, tr} ->
+              %{
+                status: "failed",
+                session_id: tr.session_id,
+                cost_usd: tr.cost_usd,
+                input_tokens: tr.input_tokens,
+                output_tokens: tr.output_tokens,
+                duration_ms: tr.duration_ms,
+                result_summary: truncate_summary(tr.result),
+                completed_at: DateTime.utc_now()
+              }
+
+            {:error, reason} ->
+              %{
+                status: "failed",
+                result_summary: "Restart error: #{inspect(reason)}",
+                completed_at: DateTime.utc_now()
+              }
+          end
+
+        Cortex.Store.update_team_run(team_run, attrs)
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp truncate_summary(nil), do: nil
+
+  defp truncate_summary(text) when is_binary(text) do
+    if String.length(text) > 2000, do: String.slice(text, 0, 2000) <> "...", else: text
+  end
+
+  defp truncate_summary(other), do: inspect(other) |> truncate_summary()
 
   defp format_token_count(nil), do: "0"
   defp format_token_count(0), do: "0"
