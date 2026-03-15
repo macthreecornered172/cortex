@@ -30,6 +30,7 @@ defmodule CortexWeb.RunDetailLive do
            last_seen: %{},
            selected_log_team: nil,
            log_lines: nil,
+           log_sort: :desc,
            expanded_logs: MapSet.new(),
            messages_team: nil,
            team_inbox: [],
@@ -57,6 +58,7 @@ defmodule CortexWeb.RunDetailLive do
            page_title: "Run: #{run.name}",
            current_tab: "overview",
            last_seen: %{},
+           log_sort: :desc,
            selected_log_team: nil,
            log_lines: nil,
            expanded_logs: MapSet.new(),
@@ -259,12 +261,14 @@ defmodule CortexWeb.RunDetailLive do
       cond do
         socket.assigns.selected_log_team ->
           log_lines = read_team_log(socket.assigns.run, socket.assigns.selected_log_team)
-          assign(socket, log_lines: log_lines)
+          sorted = sort_log_lines(log_lines, socket.assigns.log_sort)
+          assign(socket, log_lines: sorted)
 
         socket.assigns.team_names != [] ->
           first = hd(socket.assigns.team_names)
           log_lines = read_team_log(socket.assigns.run, first)
-          assign(socket, selected_log_team: first, log_lines: log_lines)
+          sorted = sort_log_lines(log_lines, socket.assigns.log_sort)
+          assign(socket, selected_log_team: first, log_lines: sorted)
 
         true ->
           socket
@@ -297,16 +301,29 @@ defmodule CortexWeb.RunDetailLive do
 
   def handle_event("select_log_team", %{"team" => team_name}, socket) do
     log_lines = read_team_log(socket.assigns.run, team_name)
-    {:noreply, assign(socket, selected_log_team: team_name, log_lines: log_lines, expanded_logs: MapSet.new())}
+    sorted = sort_log_lines(log_lines, socket.assigns.log_sort)
+    {:noreply, assign(socket, selected_log_team: team_name, log_lines: sorted, expanded_logs: MapSet.new())}
   end
 
   def handle_event("refresh_logs", _params, socket) do
     if socket.assigns.selected_log_team do
       log_lines = read_team_log(socket.assigns.run, socket.assigns.selected_log_team)
-      {:noreply, assign(socket, log_lines: log_lines, expanded_logs: MapSet.new())}
+      sorted = sort_log_lines(log_lines, socket.assigns.log_sort)
+      {:noreply, assign(socket, log_lines: sorted, expanded_logs: MapSet.new())}
     else
       {:noreply, socket}
     end
+  end
+
+  def handle_event("toggle_log_sort", _params, socket) do
+    new_sort = if socket.assigns.log_sort == :asc, do: :desc, else: :asc
+
+    sorted =
+      if socket.assigns.log_lines do
+        sort_log_lines(socket.assigns.log_lines, new_sort)
+      end
+
+    {:noreply, assign(socket, log_sort: new_sort, log_lines: sorted, expanded_logs: MapSet.new())}
   end
 
   def handle_event("toggle_log_line", %{"line" => line_str}, socket) do
@@ -806,6 +823,13 @@ defmodule CortexWeb.RunDetailLive do
               </form>
               <button
                 :if={@selected_log_team}
+                phx-click="toggle_log_sort"
+                class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
+              >
+                {if @log_sort == :desc, do: "Newest first ↓", else: "Oldest first ↑"}
+              </button>
+              <button
+                :if={@selected_log_team}
                 phx-click="refresh_logs"
                 class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
               >
@@ -1112,6 +1136,11 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   defp format_json_value(val), do: inspect(val)
+
+  defp sort_log_lines(nil, _sort), do: nil
+
+  defp sort_log_lines(lines, :desc), do: Enum.sort_by(lines, & &1.num, :desc)
+  defp sort_log_lines(lines, :asc), do: Enum.sort_by(lines, & &1.num, :asc)
 
   defp log_type_class("assistant"), do: "bg-blue-900/50 text-blue-300"
   defp log_type_class("system"), do: "bg-purple-900/50 text-purple-300"
