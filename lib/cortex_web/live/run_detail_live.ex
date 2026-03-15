@@ -778,7 +778,7 @@ defmodule CortexWeb.RunDetailLive do
                   {@selected_log_team}.log
                 </h2>
                 <span :if={@log_content} class="text-xs text-gray-600">
-                  {length(String.split(@log_content, "\n"))} lines (last {@max_log_lines})
+                  {length(String.split(@log_content, "\n"))} lines (last 500)
                 </span>
               </div>
               <%= if @log_content do %>
