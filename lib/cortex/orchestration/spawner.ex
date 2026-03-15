@@ -39,6 +39,8 @@ defmodule Cortex.Orchestration.Spawner do
   @default_permission_mode "acceptEdits"
   @default_timeout_minutes 30
   @default_command "claude"
+  # If no output received for this long, check if the port process is still alive
+  @idle_check_ms :timer.minutes(2)
 
   @doc """
   Spawns a `claude -p` process (or mock command) and captures the result.
@@ -314,7 +316,42 @@ defmodule Cortex.Orchestration.Spawner do
         kill_port(port)
         Process.cancel_timer(timer_ref)
         {:ok, %TeamResult{team: state.team_name, status: :timeout, session_id: state.session_id}}
+    after
+      @idle_check_ms ->
+        # No message in 2 minutes — check if the port process is still alive
+        if port_alive?(port) do
+          # Process is alive, just slow — keep waiting
+          Logger.debug("Spawner idle check: #{state.team_name} port still alive, continuing")
+          collect_loop(port, timer_ref, log_device, state)
+        else
+          # Port process is gone but we never got exit_status — it died silently
+          Logger.warning(
+            "Spawner idle check: #{state.team_name} port process is dead (no exit_status received)"
+          )
+
+          Process.cancel_timer(timer_ref)
+
+          {:error, {:port_died, state.collected_output}}
+        end
     end
+  end
+
+  @spec port_alive?(port()) :: boolean()
+  defp port_alive?(port) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, os_pid} ->
+        # Check if the OS process is still running
+        case System.cmd("kill", ["-0", to_string(os_pid)], stderr_to_stdout: true) do
+          {_, 0} -> true
+          _ -> false
+        end
+
+      nil ->
+        # Port is already closed
+        false
+    end
+  rescue
+    ArgumentError -> false
   end
 
   @spec extract_lines(String.t()) :: {[String.t()], String.t()}
