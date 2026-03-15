@@ -33,9 +33,6 @@ cortex-*.tar
 # Cortex runtime state (logs, results, registry, messages)
 .cortex/
 
-# Example configs and hackathon artifacts
-/examples/
-
 # Editor and IDE files
 .elixir_ls/
 .vscode/
