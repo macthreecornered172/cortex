@@ -6,7 +6,7 @@ defmodule CortexWeb.RunDetailLive do
   alias Cortex.Orchestration.DAG
 
   @max_activities 150
-  @stale_threshold_seconds 600
+  @stale_threshold_seconds 300
   @max_log_lines 500
 
   @impl true
