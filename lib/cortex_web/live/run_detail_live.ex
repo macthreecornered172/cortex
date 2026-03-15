@@ -758,7 +758,7 @@ defmodule CortexWeb.RunDetailLive do
         <:subtitle>
           <.status_badge status={@run.status} />
           <span class="ml-2 text-gray-400">
-            <.token_display input={@run.total_input_tokens} output={@run.total_output_tokens} />
+            <.token_display input={sum_team_field(@team_runs, :input_tokens)} output={sum_team_field(@team_runs, :output_tokens)} />
           </span>
           <span class="ml-2 text-gray-400">
             <.duration_display ms={@run.total_duration_ms} />
@@ -1608,6 +1608,10 @@ defmodule CortexWeb.RunDetailLive do
 
   defp count_by_status(team_runs, status) do
     Enum.count(team_runs, fn tr -> (tr.status || "pending") == status end)
+  end
+
+  defp sum_team_field(team_runs, field) do
+    team_runs |> Enum.map(&(Map.get(&1, field) || 0)) |> Enum.sum()
   end
 
   defp prepend_activity(activities, entry) do
