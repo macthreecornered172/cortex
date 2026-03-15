@@ -7,7 +7,7 @@ defmodule CortexWeb.DashboardLiveTest do
     assert html =~ "Total Runs"
     assert html =~ "Active Runs"
     assert html =~ "Total Tokens"
-    assert html =~ "New Run"
+    assert html =~ "New Workflow"
   end
 
   test "shows empty state when no runs exist", %{conn: conn} do

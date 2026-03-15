@@ -4,7 +4,7 @@ defmodule CortexWeb.RunListLiveTest do
   test "renders run list page", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/runs")
     assert html =~ "Runs"
-    assert html =~ "All orchestration runs"
+    assert html =~ "All runs"
   end
 
   test "shows empty state when no runs exist", %{conn: conn} do

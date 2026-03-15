@@ -46,11 +46,13 @@ defmodule Cortex.Store do
     - `:limit` — max number of runs (default 20)
     - `:offset` — offset for pagination (default 0)
     - `:status` — filter by status string
+    - `:mode` — filter by mode ("orchestration" or "gossip")
   """
   def list_runs(opts \\ []) do
     limit = Keyword.get(opts, :limit, 20)
     offset = Keyword.get(opts, :offset, 0)
     status = Keyword.get(opts, :status)
+    mode = Keyword.get(opts, :mode)
 
     query =
       from(r in Run,
@@ -62,6 +64,13 @@ defmodule Cortex.Store do
     query =
       if status do
         from(r in query, where: r.status == ^status)
+      else
+        query
+      end
+
+    query =
+      if mode do
+        from(r in query, where: r.mode == ^mode)
       else
         query
       end

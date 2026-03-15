@@ -49,10 +49,10 @@ defmodule CortexWeb.DashboardLive do
       <:subtitle>Overview of orchestration runs and system status</:subtitle>
       <:actions>
         <a
-          href="/new"
+          href="/workflows"
           class="inline-flex items-center rounded-md bg-cortex-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cortex-500"
         >
-          + New Run
+          + New Workflow
         </a>
       </:actions>
     </.header>

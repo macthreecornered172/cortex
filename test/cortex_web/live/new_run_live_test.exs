@@ -22,14 +22,14 @@ defmodule CortexWeb.NewRunLiveTest do
   """
 
   test "renders new run page", %{conn: conn} do
-    {:ok, _view, html} = live(conn, "/new")
+    {:ok, _view, html} = live(conn, "/workflows")
     assert html =~ "New Run"
     assert html =~ "Orchestra YAML"
     assert html =~ "Validate"
   end
 
   test "validate button shows errors for empty input", %{conn: conn} do
-    {:ok, view, _html} = live(conn, "/new")
+    {:ok, view, _html} = live(conn, "/workflows")
 
     html =
       view
@@ -40,7 +40,7 @@ defmodule CortexWeb.NewRunLiveTest do
   end
 
   test "validate button shows config preview for valid YAML", %{conn: conn} do
-    {:ok, view, _html} = live(conn, "/new")
+    {:ok, view, _html} = live(conn, "/workflows")
 
     # Submit the form with YAML content (phx-submit="validate")
     html =
@@ -55,7 +55,7 @@ defmodule CortexWeb.NewRunLiveTest do
   end
 
   test "launch creates a run and redirects", %{conn: conn} do
-    {:ok, view, _html} = live(conn, "/new")
+    {:ok, view, _html} = live(conn, "/workflows")
 
     # First validate
     view

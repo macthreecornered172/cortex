@@ -135,6 +135,7 @@ defmodule CortexWeb.NewRunLive do
         name: config.name,
         config_yaml: yaml,
         status: "pending",
+        mode: "orchestration",
         team_count: length(config.teams),
         started_at: DateTime.utc_now(),
         workspace_path: workspace_path

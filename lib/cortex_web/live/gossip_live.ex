@@ -8,7 +8,7 @@ defmodule CortexWeb.GossipLive do
 
   use CortexWeb, :live_view
 
-  alias Cortex.Gossip.{Entry, Topology}
+  alias Cortex.Gossip.{Config, Entry, Topology}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -25,7 +25,14 @@ defmodule CortexWeb.GossipLive do
        rounds_total: 0,
        running: false,
        live_project: nil,
-       selected_node: nil
+       selected_node: nil,
+       # Form state
+       yaml_content: "",
+       file_path: "",
+       workspace_path: "",
+       gossip_config: nil,
+       validation_errors: [],
+       validated: false
      )}
   end
 
@@ -110,6 +117,99 @@ defmodule CortexWeb.GossipLive do
       end
 
     {:noreply, assign(socket, selected_node: selected)}
+  end
+
+  def handle_event("form_changed", params, socket) do
+    yaml = Map.get(params, "yaml", socket.assigns.yaml_content)
+    path = Map.get(params, "path", socket.assigns.file_path)
+    workspace = Map.get(params, "workspace_path", socket.assigns.workspace_path)
+
+    {:noreply,
+     assign(socket,
+       yaml_content: yaml,
+       file_path: path,
+       workspace_path: workspace,
+       gossip_config: nil,
+       validated: false,
+       validation_errors: []
+     )}
+  end
+
+  def handle_event("validate_gossip", params, socket) do
+    yaml = Map.get(params, "yaml", socket.assigns.yaml_content)
+    path = Map.get(params, "path", socket.assigns.file_path)
+    workspace = Map.get(params, "workspace_path", socket.assigns.workspace_path)
+
+    socket = assign(socket, yaml_content: yaml, file_path: path, workspace_path: workspace)
+    effective = effective_yaml(socket)
+
+    if effective == "" do
+      {:noreply,
+       assign(socket,
+         validation_errors: ["Please provide YAML content or a file path"],
+         gossip_config: nil,
+         validated: false
+       )}
+    else
+      case Config.Loader.load_string(effective) do
+        {:ok, config} ->
+          {:noreply,
+           assign(socket,
+             gossip_config: config,
+             validated: true,
+             validation_errors: []
+           )}
+
+        {:error, errors} ->
+          {:noreply,
+           assign(socket,
+             validation_errors: errors,
+             gossip_config: nil,
+             validated: false
+           )}
+      end
+    end
+  end
+
+  def handle_event("launch_gossip", _params, socket) do
+    config = socket.assigns.gossip_config
+
+    if config == nil do
+      {:noreply, put_flash(socket, :error, "Validate configuration first")}
+    else
+      yaml = effective_yaml(socket)
+      workspace = String.trim(socket.assigns.workspace_path)
+
+      workspace_path =
+        if workspace != "" do
+          workspace
+        else
+          Path.join(System.tmp_dir!(), "cortex_gossip_#{Uniq.UUID.uuid4() |> String.slice(0, 8)}")
+        end
+
+      run_attrs = %{
+        name: config.name,
+        config_yaml: yaml,
+        status: "pending",
+        mode: "gossip",
+        team_count: length(config.agents),
+        started_at: DateTime.utc_now(),
+        workspace_path: workspace_path
+      }
+
+      case safe_create_run(run_attrs) do
+        {:ok, run} ->
+          spawn_gossip(run, config, workspace_path)
+
+          {:noreply,
+           socket
+           |> put_flash(:info, "Gossip run started!")
+           |> push_navigate(to: "/runs/#{run.id}")}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "Failed to create run")}
+      end
+    end
   end
 
   def handle_event("change_topology", %{"strategy" => strategy}, socket) do
@@ -422,17 +522,90 @@ defmodule CortexWeb.GossipLive do
             <% end %>
           </div>
         </div>
-      <% else %>
-        <!-- Empty state -->
-        <div class="bg-gray-900 rounded-lg border border-gray-800 p-12 text-center">
-          <p class="text-gray-500 text-lg mb-2">No gossip session data</p>
-          <p class="text-gray-600 text-sm">
-            Start a gossip run with a config YAML via
-            <code class="text-cortex-400">mix cortex.gossip path/to/gossip.yaml</code>
-            and this page will update in real-time.
-          </p>
-        </div>
       <% end %>
+
+      <!-- New Gossip Run Form -->
+      <div class="mt-6">
+        <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
+          <h2 class="text-lg font-semibold text-white mb-4">New Gossip Run</h2>
+          <form phx-change="form_changed" phx-submit="validate_gossip">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label class="text-xs text-gray-500 block mb-1">Gossip YAML</label>
+                <textarea
+                  name="yaml"
+                  rows="10"
+                  class="w-full bg-gray-950 border border-gray-700 rounded p-3 text-sm font-mono text-gray-300 resize-y"
+                  placeholder="Paste gossip.yaml content..."
+                ><%= @yaml_content %></textarea>
+              </div>
+              <div class="space-y-3">
+                <div>
+                  <label class="text-xs text-gray-500 block mb-1">Or load from file</label>
+                  <input
+                    type="text"
+                    name="path"
+                    value={@file_path}
+                    class="w-full bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm font-mono text-gray-300"
+                    placeholder="/path/to/gossip.yaml"
+                  />
+                </div>
+                <div>
+                  <label class="text-xs text-gray-500 block mb-1">Workspace path</label>
+                  <input
+                    type="text"
+                    name="workspace_path"
+                    value={@workspace_path}
+                    class="w-full bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm font-mono text-gray-300"
+                    placeholder="/path/to/project (default: /tmp)"
+                  />
+                </div>
+                <!-- Config Preview -->
+                <%= if @gossip_config do %>
+                  <div class="bg-gray-950 rounded p-3 text-sm space-y-1">
+                    <div><span class="text-gray-500">Project:</span> <span class="text-white">{@gossip_config.name}</span></div>
+                    <div><span class="text-gray-500">Agents:</span> <span class="text-white">{length(@gossip_config.agents)}</span></div>
+                    <div><span class="text-gray-500">Rounds:</span> <span class="text-white">{@gossip_config.gossip.rounds}</span></div>
+                    <div><span class="text-gray-500">Topology:</span> <span class="text-white">{@gossip_config.gossip.topology}</span></div>
+                    <div class="flex flex-wrap gap-1 pt-1">
+                      <span
+                        :for={agent <- @gossip_config.agents}
+                        class="bg-purple-900/50 text-purple-300 text-xs px-2 py-0.5 rounded"
+                      >
+                        {agent.name}
+                      </span>
+                    </div>
+                  </div>
+                <% end %>
+              </div>
+            </div>
+            <!-- Errors -->
+            <%= if @validation_errors != [] do %>
+              <div class="bg-rose-900/30 border border-rose-800 rounded p-3 mb-4">
+                <ul class="list-disc list-inside text-sm text-rose-200 space-y-1">
+                  <li :for={error <- @validation_errors}>{error}</li>
+                </ul>
+              </div>
+            <% end %>
+            <div class="flex gap-3">
+              <button
+                type="submit"
+                class="rounded bg-gray-700 px-4 py-2 text-sm font-medium text-white hover:bg-gray-600"
+              >
+                Validate
+              </button>
+              <button
+                :if={@validated}
+                type="button"
+                phx-click="launch_gossip"
+                class="rounded bg-cortex-600 px-4 py-2 text-sm font-medium text-white hover:bg-cortex-500"
+              >
+                Launch Gossip Run
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
     </div>
     """
   end
@@ -577,6 +750,63 @@ defmodule CortexWeb.GossipLive do
 
   defp safe_subscribe do
     Cortex.Events.subscribe()
+  rescue
+    _ -> :ok
+  end
+
+  defp effective_yaml(socket) do
+    cond do
+      socket.assigns.yaml_content != "" ->
+        socket.assigns.yaml_content
+
+      socket.assigns.file_path != "" ->
+        case File.read(socket.assigns.file_path) do
+          {:ok, content} -> content
+          _ -> ""
+        end
+
+      true ->
+        ""
+    end
+  end
+
+  defp safe_create_run(attrs) do
+    Cortex.Store.create_run(attrs)
+  rescue
+    e -> {:error, e}
+  end
+
+  defp spawn_gossip(run, config, workspace_path) do
+    run_id = run.id
+    yaml = run.config_yaml
+
+    Task.start(fn ->
+      tmp_path = Path.join(System.tmp_dir!(), "cortex_gossip_#{run_id}.yaml")
+      File.write!(tmp_path, yaml)
+
+      try do
+        {:ok, _summary} =
+          Cortex.Gossip.Coordinator.run_config(config,
+            workspace_path: workspace_path
+          )
+
+        safe_update_run_status(run, "completed")
+      rescue
+        e ->
+          safe_update_run_status(run, "failed")
+          require Logger
+          Logger.error("Gossip run #{run_id} crashed: #{inspect(e)}")
+      after
+        File.rm(tmp_path)
+      end
+    end)
+  end
+
+  defp safe_update_run_status(run, status) do
+    case Cortex.Store.get_run(run.id) do
+      nil -> :ok
+      fresh -> Cortex.Store.update_run(fresh, %{status: status, completed_at: DateTime.utc_now()})
+    end
   rescue
     _ -> :ok
   end
