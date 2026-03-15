@@ -15,12 +15,15 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
     then patches both workspace state and the DB to reflect reality.
   """
 
-  alias Cortex.Orchestration.Runner.Store, as: RunnerStore
+  alias Cortex.Orchestration.LogParser
+  alias Cortex.Orchestration.Runner
   alias Cortex.Orchestration.Runner.Outcomes
+  alias Cortex.Orchestration.Runner.Store, as: RunnerStore
   alias Cortex.Orchestration.Spawner
   alias Cortex.Orchestration.State
   alias Cortex.Orchestration.TeamResult
   alias Cortex.Orchestration.Workspace
+  alias Cortex.Store
 
   require Logger
 
@@ -60,85 +63,15 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
     with {:ok, state} <- Workspace.read_state(workspace) do
       dead_teams = find_dead_teams(state)
 
-      if dead_teams == [] do
-        Logger.info("No dead teams to resume")
-        {:ok, %{}}
-      else
-        Logger.info("Found #{length(dead_teams)} dead teams: #{Enum.join(dead_teams, ", ")}")
+      resume_opts = %{
+        command: command,
+        timeout_minutes: timeout_minutes,
+        auto_retry: auto_retry,
+        retry_delay_ms: retry_delay_ms,
+        workspace_path: workspace_path
+      }
 
-        results =
-          dead_teams
-          |> Enum.map(fn team_name ->
-            session_id = find_session_id(workspace, team_name)
-
-            if session_id do
-              Logger.info("Resuming #{team_name} (session: #{session_id})")
-
-              log_path = Workspace.log_path(workspace, team_name)
-
-              result =
-                Spawner.resume(
-                  team_name: team_name,
-                  session_id: session_id,
-                  timeout_minutes: timeout_minutes,
-                  log_path: log_path,
-                  command: command,
-                  cwd: workspace_path
-                )
-
-              case result do
-                {:ok, %TeamResult{status: :rate_limited}} when auto_retry ->
-                  Logger.warning(
-                    "#{team_name} hit rate limit, auto-retrying in #{div(retry_delay_ms, 1000)}s"
-                  )
-
-                  Process.sleep(retry_delay_ms)
-
-                  retry_result =
-                    Spawner.resume(
-                      team_name: team_name,
-                      session_id: session_id,
-                      timeout_minutes: timeout_minutes,
-                      log_path: log_path,
-                      command: command,
-                      cwd: workspace_path
-                    )
-
-                  {team_name, retry_result}
-
-                {:ok, %TeamResult{status: :rate_limited}} ->
-                  Logger.warning(
-                    "#{team_name} hit rate limit — resume again later (or use auto_retry: true)"
-                  )
-
-                  {team_name, {:error, :rate_limited}}
-
-                other ->
-                  {team_name, other}
-              end
-            else
-              Logger.warning("No session_id found for #{team_name}, cannot resume")
-              {team_name, {:error, :no_session_id}}
-            end
-          end)
-
-        # Update workspace state for resumed teams
-        Enum.each(results, fn
-          {team_name, {:ok, %TeamResult{status: :success} = tr}} ->
-            Outcomes.apply_outcome(workspace, {team_name, :ok, %{type: :success, result: tr}})
-
-          {team_name, {:ok, %TeamResult{} = tr}} ->
-            Outcomes.apply_outcome(
-              workspace,
-              {team_name, {:error, tr.status}, %{type: :failure, result: tr}}
-            )
-
-          _ ->
-            :ok
-        end)
-
-        {:ok, Map.new(results)}
-      end
+      resume_dead_teams(dead_teams, workspace, resume_opts)
     end
   end
 
@@ -166,13 +99,13 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
   """
   @spec reconcile_run(String.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def reconcile_run(run_id, opts \\ []) do
-    run = RunnerStore.safe_call(fn -> Cortex.Store.get_run(run_id) end)
+    run = RunnerStore.safe_call(fn -> Store.get_run(run_id) end)
 
     cond do
       is_nil(run) ->
         {:error, :run_not_found}
 
-      Cortex.Orchestration.Runner.coordinator_alive?(run_id) ->
+      Runner.coordinator_alive?(run_id) ->
         {:error, :coordinator_alive}
 
       true ->
@@ -188,10 +121,93 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
 
   # -- Private -----------------------------------------------------------------
 
+  defp resume_dead_teams([], _workspace, _opts) do
+    Logger.info("No dead teams to resume")
+    {:ok, %{}}
+  end
+
+  defp resume_dead_teams(dead_teams, workspace, opts) do
+    Logger.info("Found #{length(dead_teams)} dead teams: #{Enum.join(dead_teams, ", ")}")
+
+    results = Enum.map(dead_teams, &resume_single_team(workspace, &1, opts))
+    apply_resume_outcomes(results, workspace)
+
+    {:ok, Map.new(results)}
+  end
+
+  defp resume_single_team(workspace, team_name, opts) do
+    session_id = find_session_id(workspace, team_name)
+
+    if session_id do
+      do_resume_team(team_name, session_id, workspace, opts)
+    else
+      Logger.warning("No session_id found for #{team_name}, cannot resume")
+      {team_name, {:error, :no_session_id}}
+    end
+  end
+
+  defp do_resume_team(team_name, session_id, workspace, opts) do
+    Logger.info("Resuming #{team_name} (session: #{session_id})")
+    log_path = Workspace.log_path(workspace, team_name)
+
+    spawn_opts = [
+      team_name: team_name,
+      session_id: session_id,
+      timeout_minutes: opts.timeout_minutes,
+      log_path: log_path,
+      command: opts.command,
+      cwd: opts.workspace_path
+    ]
+
+    result = Spawner.resume(spawn_opts)
+    handle_resume_result(team_name, result, spawn_opts, opts)
+  end
+
+  defp handle_resume_result(team_name, {:ok, %TeamResult{status: :rate_limited}}, spawn_opts, %{
+         auto_retry: true,
+         retry_delay_ms: retry_delay_ms
+       }) do
+    Logger.warning("#{team_name} hit rate limit, auto-retrying in #{div(retry_delay_ms, 1000)}s")
+
+    Process.sleep(retry_delay_ms)
+    {team_name, Spawner.resume(spawn_opts)}
+  end
+
+  defp handle_resume_result(
+         team_name,
+         {:ok, %TeamResult{status: :rate_limited}},
+         _spawn_opts,
+         _opts
+       ) do
+    Logger.warning("#{team_name} hit rate limit — resume again later (or use auto_retry: true)")
+
+    {team_name, {:error, :rate_limited}}
+  end
+
+  defp handle_resume_result(team_name, other, _spawn_opts, _opts) do
+    {team_name, other}
+  end
+
+  defp apply_resume_outcomes(results, workspace) do
+    Enum.each(results, fn
+      {team_name, {:ok, %TeamResult{status: :success} = tr}} ->
+        Outcomes.apply_outcome(workspace, {team_name, :ok, %{type: :success, result: tr}})
+
+      {team_name, {:ok, %TeamResult{} = tr}} ->
+        Outcomes.apply_outcome(
+          workspace,
+          {team_name, {:error, tr.status}, %{type: :failure, result: tr}}
+        )
+
+      _ ->
+        :ok
+    end)
+  end
+
   @spec do_reconcile(String.t(), String.t()) :: {:ok, [map()]}
   defp do_reconcile(run_id, workspace_path) do
     workspace = %Workspace{path: Path.join(workspace_path, ".cortex")}
-    team_runs = RunnerStore.safe_call(fn -> Cortex.Store.get_team_runs(run_id) end) || []
+    team_runs = RunnerStore.safe_call(fn -> Store.get_team_runs(run_id) end) || []
 
     # Only reconcile teams stuck in "running"
     running_teams =
@@ -201,7 +217,7 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
       Enum.flat_map(running_teams, fn tr ->
         log_path = Workspace.log_path(workspace, tr.team_name)
 
-        case Cortex.Orchestration.LogParser.parse(log_path) do
+        case LogParser.parse(log_path) do
           {:ok, report} ->
             reconcile_team(tr, report, workspace, run_id)
 
@@ -219,138 +235,147 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
   end
 
   @spec reconcile_team(map(), map(), Workspace.t(), String.t()) :: [map()]
-  defp reconcile_team(team_run, report, workspace, run_id) do
-    cond do
-      report.has_result and report.exit_subtype == "success" ->
-        new_status = "completed"
+  defp reconcile_team(
+         team_run,
+         %{has_result: true, exit_subtype: "success"} = report,
+         workspace,
+         run_id
+       ) do
+    apply_success_reconciliation(team_run, report, workspace, run_id)
+  end
 
-        # Update workspace state.json
-        Workspace.update_team_state(workspace, team_run.team_name,
-          status: "done",
-          result_summary: report.result_text,
-          cost_usd: report.cost_usd,
-          input_tokens: report.total_input_tokens,
-          output_tokens: report.total_output_tokens
-        )
+  defp reconcile_team(team_run, %{has_result: true} = report, workspace, run_id) do
+    apply_failure_reconciliation(team_run, report, workspace, run_id)
+  end
 
-        Workspace.update_registry_entry(workspace, team_run.team_name,
-          status: "done",
-          session_id: report.session_id
-        )
+  defp reconcile_team(
+         team_run,
+         %{line_count: line_count, diagnosis: diagnosis} = report,
+         _workspace,
+         _run_id
+       )
+       when line_count > 0 and diagnosis != :empty_log do
+    [
+      %{
+        team: team_run.team_name,
+        from: "running",
+        to: "running",
+        detail: "no result line — #{report.diagnosis_detail} (#{report.line_count} log lines)"
+      }
+    ]
+  end
 
-        # Update DB
-        RunnerStore.safe_call(fn ->
-          fresh = Cortex.Store.get_team_run(run_id, team_run.team_name)
+  defp reconcile_team(_team_run, _report, _workspace, _run_id), do: []
 
-          if fresh do
-            Cortex.Store.update_team_run(fresh, %{
-              status: new_status,
-              cost_usd: report.cost_usd,
-              input_tokens: report.total_input_tokens,
-              output_tokens: report.total_output_tokens,
-              session_id: report.session_id,
-              result_summary: RunnerStore.truncate_summary(report.result_text),
-              completed_at: DateTime.utc_now()
-            })
-          end
-        end)
+  defp apply_success_reconciliation(team_run, report, workspace, run_id) do
+    new_status = "completed"
 
-        [
-          %{
-            team: team_run.team_name,
-            from: "running",
-            to: new_status,
-            detail:
-              "log shows successful completion ($#{Float.round((report.cost_usd || 0) * 1.0, 4)})"
-          }
-        ]
+    Workspace.update_team_state(workspace, team_run.team_name,
+      status: "done",
+      result_summary: report.result_text,
+      cost_usd: report.cost_usd,
+      input_tokens: report.total_input_tokens,
+      output_tokens: report.total_output_tokens
+    )
 
-      report.has_result ->
-        new_status = "failed"
+    Workspace.update_registry_entry(workspace, team_run.team_name,
+      status: "done",
+      session_id: report.session_id
+    )
 
-        Workspace.update_team_state(workspace, team_run.team_name,
-          status: "failed",
-          result_summary: report.result_text,
-          cost_usd: report.cost_usd
-        )
+    update_team_run_in_store(run_id, team_run.team_name, %{
+      status: new_status,
+      cost_usd: report.cost_usd,
+      input_tokens: report.total_input_tokens,
+      output_tokens: report.total_output_tokens,
+      session_id: report.session_id,
+      result_summary: RunnerStore.truncate_summary(report.result_text),
+      completed_at: DateTime.utc_now()
+    })
 
-        Workspace.update_registry_entry(workspace, team_run.team_name,
-          status: "failed",
-          session_id: report.session_id
-        )
+    [
+      %{
+        team: team_run.team_name,
+        from: "running",
+        to: new_status,
+        detail:
+          "log shows successful completion ($#{Float.round((report.cost_usd || 0) * 1.0, 4)})"
+      }
+    ]
+  end
 
-        RunnerStore.safe_call(fn ->
-          fresh = Cortex.Store.get_team_run(run_id, team_run.team_name)
+  defp apply_failure_reconciliation(team_run, report, workspace, run_id) do
+    new_status = "failed"
 
-          if fresh do
-            Cortex.Store.update_team_run(fresh, %{
-              status: new_status,
-              cost_usd: report.cost_usd,
-              session_id: report.session_id,
-              result_summary: RunnerStore.truncate_summary(report.result_text),
-              completed_at: DateTime.utc_now()
-            })
-          end
-        end)
+    Workspace.update_team_state(workspace, team_run.team_name,
+      status: "failed",
+      result_summary: report.result_text,
+      cost_usd: report.cost_usd
+    )
 
-        [
-          %{
-            team: team_run.team_name,
-            from: "running",
-            to: new_status,
-            detail: "log shows exit: #{report.diagnosis_detail}"
-          }
-        ]
+    Workspace.update_registry_entry(workspace, team_run.team_name,
+      status: "failed",
+      session_id: report.session_id
+    )
 
-      report.line_count > 0 and report.diagnosis != :empty_log ->
-        # Log exists but no result line — process died mid-execution
-        # Don't change status, just report what we found
-        [
-          %{
-            team: team_run.team_name,
-            from: "running",
-            to: "running",
-            detail: "no result line — #{report.diagnosis_detail} (#{report.line_count} log lines)"
-          }
-        ]
+    update_team_run_in_store(run_id, team_run.team_name, %{
+      status: new_status,
+      cost_usd: report.cost_usd,
+      session_id: report.session_id,
+      result_summary: RunnerStore.truncate_summary(report.result_text),
+      completed_at: DateTime.utc_now()
+    })
 
-      true ->
-        []
-    end
+    [
+      %{
+        team: team_run.team_name,
+        from: "running",
+        to: new_status,
+        detail: "log shows exit: #{report.diagnosis_detail}"
+      }
+    ]
+  end
+
+  defp update_team_run_in_store(run_id, team_name, attrs) do
+    RunnerStore.safe_call(fn ->
+      fresh = Store.get_team_run(run_id, team_name)
+      if fresh, do: Store.update_team_run(fresh, attrs)
+    end)
   end
 
   @spec maybe_finalize_run(String.t()) :: :ok
   defp maybe_finalize_run(run_id) do
     RunnerStore.safe_call(fn ->
-      team_runs = Cortex.Store.get_team_runs(run_id)
+      team_runs = Store.get_team_runs(run_id)
 
       all_done =
         Enum.all?(team_runs, fn tr ->
           tr.status in ["completed", "done", "failed"]
         end)
 
-      if all_done do
-        run = Cortex.Store.get_run(run_id)
-
-        if run && run.status == "running" do
-          total_cost = team_runs |> Enum.map(&(&1.cost_usd || 0.0)) |> Enum.sum()
-          total_input = team_runs |> Enum.map(&(&1.input_tokens || 0)) |> Enum.sum()
-          total_output = team_runs |> Enum.map(&(&1.output_tokens || 0)) |> Enum.sum()
-
-          has_failures = Enum.any?(team_runs, &(&1.status == "failed"))
-
-          Cortex.Store.update_run(run, %{
-            status: if(has_failures, do: "failed", else: "completed"),
-            total_cost_usd: total_cost,
-            total_input_tokens: total_input,
-            total_output_tokens: total_output,
-            completed_at: DateTime.utc_now()
-          })
-        end
-      end
+      if all_done, do: finalize_run(run_id, team_runs)
     end)
 
     :ok
+  end
+
+  defp finalize_run(run_id, team_runs) do
+    run = Store.get_run(run_id)
+
+    if run && run.status == "running" do
+      total_cost = team_runs |> Enum.map(&(&1.cost_usd || 0.0)) |> Enum.sum()
+      total_input = team_runs |> Enum.map(&(&1.input_tokens || 0)) |> Enum.sum()
+      total_output = team_runs |> Enum.map(&(&1.output_tokens || 0)) |> Enum.sum()
+      has_failures = Enum.any?(team_runs, &(&1.status == "failed"))
+
+      Store.update_run(run, %{
+        status: if(has_failures, do: "failed", else: "completed"),
+        total_cost_usd: total_cost,
+        total_input_tokens: total_input,
+        total_output_tokens: total_output,
+        completed_at: DateTime.utc_now()
+      })
+    end
   end
 
   @spec find_dead_teams(State.t()) :: [String.t()]

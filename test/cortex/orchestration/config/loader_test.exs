@@ -124,7 +124,7 @@ defmodule Cortex.Orchestration.Config.LoaderTest do
       """
 
       assert {:error, errors} = Loader.load_string(bad_yaml)
-      assert length(errors) > 0
+      assert errors != []
       assert hd(errors) =~ "failed to parse YAML"
     end
 
@@ -253,7 +253,7 @@ defmodule Cortex.Orchestration.Config.LoaderTest do
   describe "load/1" do
     test "returns error for non-existent file" do
       assert {:error, errors} = Loader.load("/tmp/nonexistent_cortex_test.yaml")
-      assert length(errors) > 0
+      assert errors != []
       assert hd(errors) =~ "file not found"
     end
 

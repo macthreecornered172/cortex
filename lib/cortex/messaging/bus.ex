@@ -18,6 +18,7 @@ defmodule Cortex.Messaging.Bus do
 
   """
 
+  alias Cortex.Messaging.Mailbox
   alias Cortex.Messaging.Message
   alias Cortex.Messaging.Router
 
@@ -97,7 +98,7 @@ defmodule Cortex.Messaging.Bus do
   def receive_message(agent_id) do
     case lookup_mailbox(agent_id) do
       {:ok, mailbox_pid} ->
-        Cortex.Messaging.Mailbox.receive_message(mailbox_pid)
+        Mailbox.receive_message(mailbox_pid)
 
       {:error, _} = error ->
         error
@@ -113,7 +114,7 @@ defmodule Cortex.Messaging.Bus do
   def receive_message(agent_id, timeout) do
     case lookup_mailbox(agent_id) do
       {:ok, mailbox_pid} ->
-        Cortex.Messaging.Mailbox.receive_message(mailbox_pid, timeout)
+        Mailbox.receive_message(mailbox_pid, timeout)
 
       {:error, _} ->
         :timeout
@@ -127,7 +128,7 @@ defmodule Cortex.Messaging.Bus do
   def inbox(agent_id) do
     case lookup_mailbox(agent_id) do
       {:ok, mailbox_pid} ->
-        Cortex.Messaging.Mailbox.peek(mailbox_pid)
+        Mailbox.peek(mailbox_pid)
 
       {:error, _} ->
         []

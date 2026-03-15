@@ -1,6 +1,8 @@
 defmodule Mix.Tasks.Cortex.RunTest do
   use ExUnit.Case, async: true
 
+  alias Mix.Tasks.Cortex.Run
+
   import ExUnit.CaptureIO
 
   @moduletag :cli
@@ -90,13 +92,13 @@ defmodule Mix.Tasks.Cortex.RunTest do
   describe "argument parsing" do
     test "raises on missing config path" do
       assert_raise Mix.Error, ~r/Usage/, fn ->
-        Mix.Tasks.Cortex.Run.run([])
+        Run.run([])
       end
     end
 
     test "raises on missing config path with only flags" do
       assert_raise Mix.Error, ~r/Usage/, fn ->
-        Mix.Tasks.Cortex.Run.run(["--dry-run"])
+        Run.run(["--dry-run"])
       end
     end
   end
@@ -110,7 +112,7 @@ defmodule Mix.Tasks.Cortex.RunTest do
 
         output =
           capture_io(fn ->
-            Mix.Tasks.Cortex.Run.run([yaml_path, "--dry-run"])
+            Run.run([yaml_path, "--dry-run"])
           end)
 
         assert output =~ "Cortex Orchestration Engine"
@@ -135,7 +137,7 @@ defmodule Mix.Tasks.Cortex.RunTest do
 
         output =
           capture_io(fn ->
-            Mix.Tasks.Cortex.Run.run([yaml_path, "-d"])
+            Run.run([yaml_path, "-d"])
           end)
 
         assert output =~ "DRY RUN"
@@ -175,7 +177,7 @@ defmodule Mix.Tasks.Cortex.RunTest do
       # capture_io won't capture exit, but we can catch the exit
       assert catch_exit(
                capture_io(:stderr, fn ->
-                 Mix.Tasks.Cortex.Run.run(["/nonexistent/orchestra.yaml"])
+                 Run.run(["/nonexistent/orchestra.yaml"])
                end)
              ) == {:shutdown, 1}
     end
@@ -188,7 +190,7 @@ defmodule Mix.Tasks.Cortex.RunTest do
 
         assert catch_exit(
                  capture_io(:stderr, fn ->
-                   Mix.Tasks.Cortex.Run.run([yaml_path])
+                   Run.run([yaml_path])
                  end)
                ) == {:shutdown, 1}
       after

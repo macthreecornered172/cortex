@@ -14,15 +14,16 @@ defmodule Cortex.Orchestration.Runner.Executor do
   """
 
   alias Cortex.Messaging.InboxBridge
+  alias Cortex.Messaging.OutboxWatcher
   alias Cortex.Orchestration.Config
   alias Cortex.Orchestration.Injection
-  alias Cortex.Orchestration.Config
-  alias Cortex.Orchestration.Runner.Store, as: RunnerStore
   alias Cortex.Orchestration.Runner.Outcomes
+  alias Cortex.Orchestration.Runner.Store, as: RunnerStore
   alias Cortex.Orchestration.Spawner
   alias Cortex.Orchestration.Summary
   alias Cortex.Orchestration.TeamResult
   alias Cortex.Orchestration.Workspace
+  alias Cortex.Store.Schemas.TeamRun, as: TeamRunSchema
   alias Cortex.Telemetry, as: Tel
 
   require Logger
@@ -159,10 +160,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
     else
       reset_zombie_teams(team_runs)
 
-      RunnerStore.safe_call(fn ->
-        fresh = Cortex.Store.get_run(run_id)
-        if fresh, do: Cortex.Store.update_run(fresh, %{status: "running"})
-      end)
+      mark_run_as_running(run_id)
 
       safe_register_runner(run_id)
 
@@ -316,89 +314,61 @@ defmodule Cortex.Orchestration.Runner.Executor do
         # All teams in this tier already completed -- skip
         {:cont, acc}
       else
-        broadcast(:tier_started, %{tier: tier_index, teams: team_names})
-
-        {:ok, state} = Workspace.read_state(workspace)
-
-        now = DateTime.utc_now() |> DateTime.to_iso8601()
-
-        Enum.each(team_names, fn name ->
-          Workspace.update_team_state(workspace, name, status: "running")
-          Workspace.update_registry_entry(workspace, name, status: "running", started_at: now)
-
-          RunnerStore.safe_call(fn ->
-            if run_id do
-              team = find_team(config.teams, name)
-              team_prompt = Injection.build_prompt(team, config.name, state, config.defaults)
-              team_log_path = Workspace.log_path(workspace, name)
-
-              case Cortex.Store.get_team_run(run_id, name) do
-                nil ->
-                  Cortex.Store.create_team_run(%{
-                    run_id: run_id,
-                    team_name: name,
-                    role: team.lead.role,
-                    tier: tier_index,
-                    status: "running",
-                    prompt: team_prompt,
-                    log_path: team_log_path,
-                    started_at: DateTime.utc_now()
-                  })
-
-                existing ->
-                  Cortex.Store.update_team_run(existing, %{
-                    status: "running",
-                    prompt: team_prompt,
-                    log_path: team_log_path,
-                    started_at: DateTime.utc_now(),
-                    completed_at: nil,
-                    result_summary: nil,
-                    session_id: nil
-                  })
-              end
-            end
-          end)
-        end)
-
-        outcomes =
-          team_names
-          |> Enum.map(fn name ->
-            Task.async(fn ->
-              run_team(name, config, workspace, state, command, run_id)
-            end)
-          end)
-          |> Task.await_many(@default_task_timeout_ms)
-
-        Enum.each(outcomes, fn outcome ->
-          Outcomes.apply_outcome(workspace, outcome)
-          Outcomes.apply_store_outcome(run_id, outcome)
-        end)
-
-        failures =
-          outcomes
-          |> Enum.filter(fn {_name, status, _data} -> status != :ok end)
-          |> Enum.map(fn {name, _, _} -> name end)
-
-        broadcast(:tier_completed, %{
-          tier: tier_index,
-          teams: team_names,
-          failures: failures
-        })
-
-        Tel.emit_tier_completed(%{tier_index: tier_index, teams: team_names, failures: failures})
-
-        cond do
-          failures == [] ->
-            {:cont, acc}
-
-          continue_on_error ->
-            {:cont, acc}
-
-          true ->
-            {:halt, {:error, {:tier_failed, tier_index, failures}}}
-        end
+        execute_tier(team_names, tier_index, config, workspace, command, continue_on_error, run_id, acc)
       end
     end)
+  end
+
+  defp execute_tier(team_names, tier_index, config, workspace, command, continue_on_error, run_id, acc) do
+    broadcast(:tier_started, %{tier: tier_index, teams: team_names})
+
+    {:ok, state} = Workspace.read_state(workspace)
+
+    now = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    Enum.each(team_names, fn name ->
+      Workspace.update_team_state(workspace, name, status: "running")
+      Workspace.update_registry_entry(workspace, name, status: "running", started_at: now)
+      upsert_team_run_record(run_id, name, config, state, workspace, tier_index)
+    end)
+
+    outcomes =
+      team_names
+      |> Enum.map(fn name ->
+        Task.async(fn ->
+          run_team(name, config, workspace, state, command, run_id)
+        end)
+      end)
+      |> Task.await_many(@default_task_timeout_ms)
+
+    Enum.each(outcomes, fn outcome ->
+      Outcomes.apply_outcome(workspace, outcome)
+      Outcomes.apply_store_outcome(run_id, outcome)
+    end)
+
+    failures =
+      outcomes
+      |> Enum.filter(fn {_name, status, _data} -> status != :ok end)
+      |> Enum.map(fn {name, _, _} -> name end)
+
+    broadcast(:tier_completed, %{
+      tier: tier_index,
+      teams: team_names,
+      failures: failures
+    })
+
+    Tel.emit_tier_completed(%{tier_index: tier_index, teams: team_names, failures: failures})
+
+    cond do
+      failures == [] ->
+        {:cont, acc}
+
+      continue_on_error ->
+        {:cont, acc}
+
+      true ->
+        {:halt, {:error, {:tier_failed, tier_index, failures}}}
+    end
   end
 
   # -- Team execution ---------------------------------------------------------
@@ -596,33 +566,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
       status: :complete
     })
 
-    RunnerStore.safe_call(fn ->
-      if run_id do
-        {:ok, state} = Workspace.read_state(workspace)
-
-        team_states = Map.values(state.teams)
-        total_cost = team_states |> Enum.map(fn ts -> ts.cost_usd || 0.0 end) |> Enum.sum()
-
-        total_input_tokens =
-          team_states |> Enum.map(fn ts -> ts.input_tokens || 0 end) |> Enum.sum()
-
-        total_output_tokens =
-          team_states |> Enum.map(fn ts -> ts.output_tokens || 0 end) |> Enum.sum()
-
-        run = Cortex.Store.get_run(run_id)
-
-        if run do
-          Cortex.Store.update_run(run, %{
-            status: "completed",
-            total_cost_usd: total_cost,
-            total_input_tokens: total_input_tokens,
-            total_output_tokens: total_output_tokens,
-            total_duration_ms: run_duration,
-            completed_at: DateTime.utc_now()
-          })
-        end
-      end
-    end)
+    persist_successful_run(run_id, workspace, run_duration)
 
     build_summary(config, workspace, run_duration)
   end
@@ -646,19 +590,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
       status: :failed
     })
 
-    RunnerStore.safe_call(fn ->
-      if run_id do
-        run = Cortex.Store.get_run(run_id)
-
-        if run do
-          Cortex.Store.update_run(run, %{
-            status: "failed",
-            total_duration_ms: run_duration,
-            completed_at: DateTime.utc_now()
-          })
-        end
-      end
-    end)
+    persist_failed_run(run_id, run_duration)
 
     error
   end
@@ -753,7 +685,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
   end
 
   defp safe_start_watcher(opts) do
-    case Cortex.Messaging.OutboxWatcher.start(opts) do
+    case OutboxWatcher.start(opts) do
       {:ok, pid} -> pid
       _ -> nil
     end
@@ -761,26 +693,128 @@ defmodule Cortex.Orchestration.Runner.Executor do
     _ -> nil
   end
 
+  # -- Run store persistence helpers ------------------------------------------
+
+  defp upsert_team_run_record(nil, _name, _config, _state, _workspace, _tier_index), do: :ok
+
+  defp upsert_team_run_record(run_id, name, config, state, workspace, tier_index) do
+    team = find_team(config.teams, name)
+    team_prompt = Injection.build_prompt(team, config.name, state, config.defaults)
+    team_log_path = Workspace.log_path(workspace, name)
+
+    RunnerStore.safe_call(fn ->
+      case Cortex.Store.get_team_run(run_id, name) do
+        nil ->
+          Cortex.Store.create_team_run(%{
+            run_id: run_id,
+            team_name: name,
+            role: team.lead.role,
+            tier: tier_index,
+            status: "running",
+            prompt: team_prompt,
+            log_path: team_log_path,
+            started_at: DateTime.utc_now()
+          })
+
+        existing ->
+          Cortex.Store.update_team_run(existing, %{
+            status: "running",
+            prompt: team_prompt,
+            log_path: team_log_path,
+            started_at: DateTime.utc_now(),
+            completed_at: nil,
+            result_summary: nil,
+            session_id: nil
+          })
+      end
+    end)
+  end
+
+  defp mark_run_as_running(run_id) do
+    RunnerStore.safe_call(fn ->
+      case Cortex.Store.get_run(run_id) do
+        nil -> :ok
+        run -> Cortex.Store.update_run(run, %{status: "running"})
+      end
+    end)
+  end
+
+  defp persist_successful_run(nil, _workspace, _run_duration), do: :ok
+
+  defp persist_successful_run(run_id, workspace, run_duration) do
+    RunnerStore.safe_call(fn ->
+      {:ok, state} = Workspace.read_state(workspace)
+      team_states = Map.values(state.teams)
+
+      totals = aggregate_team_totals(team_states)
+
+      case Cortex.Store.get_run(run_id) do
+        nil ->
+          :ok
+
+        run ->
+          Cortex.Store.update_run(run, %{
+            status: "completed",
+            total_cost_usd: totals.cost,
+            total_input_tokens: totals.input_tokens,
+            total_output_tokens: totals.output_tokens,
+            total_duration_ms: run_duration,
+            completed_at: DateTime.utc_now()
+          })
+      end
+    end)
+  end
+
+  defp persist_failed_run(nil, _run_duration), do: :ok
+
+  defp persist_failed_run(run_id, run_duration) do
+    RunnerStore.safe_call(fn ->
+      case Cortex.Store.get_run(run_id) do
+        nil ->
+          :ok
+
+        run ->
+          Cortex.Store.update_run(run, %{
+            status: "failed",
+            total_duration_ms: run_duration,
+            completed_at: DateTime.utc_now()
+          })
+      end
+    end)
+  end
+
+  defp aggregate_team_totals(team_states) do
+    %{
+      cost: team_states |> Enum.map(fn ts -> ts.cost_usd || 0.0 end) |> Enum.sum(),
+      input_tokens: team_states |> Enum.map(fn ts -> ts.input_tokens || 0 end) |> Enum.sum(),
+      output_tokens: team_states |> Enum.map(fn ts -> ts.output_tokens || 0 end) |> Enum.sum()
+    }
+  end
+
   # -- Zombie team reset ------------------------------------------------------
 
   # Resets team runs stuck in "running" status (zombies from a crashed run)
   # back to "pending" so they can be re-executed.
   defp reset_zombie_teams(team_runs) do
-    Enum.each(team_runs, fn tr ->
-      if tr.status == "running" do
-        RunnerStore.safe_call(fn ->
-          fresh = Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, tr.id)
+    team_runs
+    |> Enum.filter(fn tr -> tr.status == "running" end)
+    |> Enum.each(&reset_single_zombie/1)
+  end
 
-          if fresh do
-            Cortex.Store.update_team_run(fresh, %{
-              status: "pending",
-              started_at: nil,
-              completed_at: nil,
-              result_summary: nil,
-              session_id: nil
-            })
-          end
-        end)
+  defp reset_single_zombie(tr) do
+    RunnerStore.safe_call(fn ->
+      case Cortex.Repo.get(TeamRunSchema, tr.id) do
+        nil ->
+          :ok
+
+        fresh ->
+          Cortex.Store.update_team_run(fresh, %{
+            status: "pending",
+            started_at: nil,
+            completed_at: nil,
+            result_summary: nil,
+            session_id: nil
+          })
       end
     end)
   end

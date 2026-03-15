@@ -76,12 +76,7 @@ defmodule Cortex.Orchestration.LogParser do
             {new_entries, new_state} = process_line(parsed, idx, state)
 
             # Fill in missing timestamps with last known timestamp
-            filled_entries =
-              Enum.map(new_entries, fn entry ->
-                if entry.timestamp,
-                  do: entry,
-                  else: %{entry | timestamp: new_state.last_timestamp}
-              end)
+            filled_entries = fill_timestamps(new_entries, new_state.last_timestamp)
 
             {entries ++ filled_entries, new_state}
 
@@ -227,90 +222,15 @@ defmodule Cortex.Orchestration.LogParser do
     input_tokens = Map.get(usage, "input_tokens", 0)
     output_tokens = Map.get(usage, "output_tokens", 0)
 
-    tools =
-      content
-      |> Enum.filter(&(is_map(&1) and Map.get(&1, "type") == "tool_use"))
-      |> Enum.map(fn block ->
-        name = Map.get(block, "name", "unknown")
-        input = Map.get(block, "input", %{})
-        {name, summarize_tool_input(name, input)}
-      end)
+    tools = extract_tool_blocks(content)
+    thinking = extract_content_text(content, "thinking", "thinking")
+    text = extract_content_text(content, "text", "text")
 
-    thinking =
-      content
-      |> Enum.filter(&(is_map(&1) and Map.get(&1, "type") == "thinking"))
-      |> Enum.map_join(" ", &Map.get(&1, "thinking", ""))
-
-    text =
-      content
-      |> Enum.filter(&(is_map(&1) and Map.get(&1, "type") == "text"))
-      |> Enum.map_join(" ", &Map.get(&1, "text", ""))
-
-    entries = []
-
-    # Add thinking entry if present
     entries =
-      if thinking != "" do
-        entries ++
-          [
-            %{
-              index: idx,
-              type: :thinking,
-              detail: truncate(thinking, 150),
-              timestamp: timestamp,
-              tools: []
-            }
-          ]
-      else
-        entries
-      end
-
-    # Add text entry if present
-    entries =
-      if text != "" do
-        entries ++
-          [
-            %{
-              index: idx,
-              type: :text,
-              detail: truncate(text, 200),
-              timestamp: timestamp,
-              tools: []
-            }
-          ]
-      else
-        entries
-      end
-
-    # Add tool entries
-    entries =
-      entries ++
-        Enum.map(tools, fn {name, summary} ->
-          %{
-            index: idx,
-            type: :tool_use,
-            detail: summary,
-            timestamp: timestamp,
-            tools: [name]
-          }
-        end)
-
-    # Add stop reason if end_turn
-    entries =
-      if stop_reason == "end_turn" and tools == [] do
-        entries ++
-          [
-            %{
-              index: idx,
-              type: :end_turn,
-              detail: "agent finished responding",
-              timestamp: timestamp,
-              tools: []
-            }
-          ]
-      else
-        entries
-      end
+      build_thinking_entry(thinking, idx, timestamp) ++
+        build_text_entry(text, idx, timestamp) ++
+        build_tool_entries(tools, idx, timestamp) ++
+        build_end_turn_entry(stop_reason, tools, idx, timestamp)
 
     new_state = %{
       state
@@ -336,20 +256,7 @@ defmodule Cortex.Orchestration.LogParser do
         |> Enum.filter(&(is_map(&1) and Map.get(&1, "type") == "tool_result"))
         |> Enum.map(fn tr ->
           is_error = Map.get(tr, "is_error", false)
-          result_content = Map.get(tr, "content", "")
-
-          result_text =
-            cond do
-              is_binary(result_content) ->
-                result_content
-
-              is_list(result_content) ->
-                Enum.map_join(result_content, " ", &Map.get(&1, "text", ""))
-
-              true ->
-                inspect(result_content)
-            end
-
+          result_text = normalize_tool_result_content(Map.get(tr, "content", ""))
           {is_error, truncate(result_text, 150)}
         end)
       else
@@ -476,54 +383,66 @@ defmodule Cortex.Orchestration.LogParser do
   # -- Diagnosis --
 
   defp diagnose(state, entries) do
-    cond do
-      state.has_result and state.exit_subtype == "success" ->
-        %{code: :completed, detail: "Session completed successfully"}
-
-      state.has_result and state.exit_subtype == "error_max_turns" ->
-        %{code: :max_turns, detail: "Hit max turns limit"}
-
-      state.has_result and state.exit_subtype == "error_during_execution" ->
-        error_detail = extract_error_detail(state.result_text)
-        %{code: :error_during_execution, detail: "Error during execution: #{error_detail}"}
-
-      state.has_result ->
-        error_detail = extract_error_detail(state.result_text)
-
-        detail =
-          if error_detail != "" do
-            "Exited (#{state.exit_subtype}): #{error_detail}"
-          else
-            "Exited with subtype: #{state.exit_subtype}"
-          end
-
-        %{code: :exited, detail: detail}
-
-      entries == [] ->
-        %{code: :empty_log, detail: "Log file is empty — process may have never started"}
-
-      state.session_id == nil ->
-        %{code: :no_session, detail: "No session init found — process crashed on startup"}
-
-      state.last_type == :user ->
-        %{
-          code: :died_after_tool_result,
-          detail: "Log ends after receiving a tool result — process died before next response"
-        }
-
-      state.last_tool != nil ->
-        %{
-          code: :died_during_tool,
-          detail:
-            "Log ends after calling #{state.last_tool} — process died or was killed mid-execution"
-        }
-
-      true ->
-        %{
-          code: :log_ends_without_result,
-          detail: "Log ends without a result line — process exited without completing"
-        }
+    if state.has_result do
+      diagnose_with_result(state)
+    else
+      diagnose_without_result(state, entries)
     end
+  end
+
+  defp diagnose_with_result(%{exit_subtype: "success"}) do
+    %{code: :completed, detail: "Session completed successfully"}
+  end
+
+  defp diagnose_with_result(%{exit_subtype: "error_max_turns"}) do
+    %{code: :max_turns, detail: "Hit max turns limit"}
+  end
+
+  defp diagnose_with_result(%{exit_subtype: "error_during_execution", result_text: result_text}) do
+    error_detail = extract_error_detail(result_text)
+    %{code: :error_during_execution, detail: "Error during execution: #{error_detail}"}
+  end
+
+  defp diagnose_with_result(%{exit_subtype: exit_subtype, result_text: result_text}) do
+    error_detail = extract_error_detail(result_text)
+
+    detail =
+      if error_detail != "" do
+        "Exited (#{exit_subtype}): #{error_detail}"
+      else
+        "Exited with subtype: #{exit_subtype}"
+      end
+
+    %{code: :exited, detail: detail}
+  end
+
+  defp diagnose_without_result(_state, []) do
+    %{code: :empty_log, detail: "Log file is empty — process may have never started"}
+  end
+
+  defp diagnose_without_result(%{session_id: nil}, _entries) do
+    %{code: :no_session, detail: "No session init found — process crashed on startup"}
+  end
+
+  defp diagnose_without_result(%{last_type: :user}, _entries) do
+    %{
+      code: :died_after_tool_result,
+      detail: "Log ends after receiving a tool result — process died before next response"
+    }
+  end
+
+  defp diagnose_without_result(%{last_tool: last_tool}, _entries) when last_tool != nil do
+    %{
+      code: :died_during_tool,
+      detail: "Log ends after calling #{last_tool} — process died or was killed mid-execution"
+    }
+  end
+
+  defp diagnose_without_result(_state, _entries) do
+    %{
+      code: :log_ends_without_result,
+      detail: "Log ends without a result line — process exited without completing"
+    }
   end
 
   defp extract_error_detail(nil), do: ""
@@ -551,7 +470,83 @@ defmodule Cortex.Orchestration.LogParser do
     end
   end
 
-  # -- Helpers --
+  # -- Tool Result Normalization --
+
+  defp normalize_tool_result_content(content) when is_binary(content), do: content
+
+  defp normalize_tool_result_content(content) when is_list(content) do
+    Enum.map_join(content, " ", &Map.get(&1, "text", ""))
+  end
+
+  defp normalize_tool_result_content(content), do: inspect(content)
+
+  # -- Assistant Message Extraction --
+
+  defp extract_tool_blocks(content) do
+    content
+    |> Enum.filter(&(is_map(&1) and Map.get(&1, "type") == "tool_use"))
+    |> Enum.map(fn block ->
+      name = Map.get(block, "name", "unknown")
+      input = Map.get(block, "input", %{})
+      {name, summarize_tool_input(name, input)}
+    end)
+  end
+
+  defp extract_content_text(content, type_key, text_key) do
+    content
+    |> Enum.filter(&(is_map(&1) and Map.get(&1, "type") == type_key))
+    |> Enum.map_join(" ", &Map.get(&1, text_key, ""))
+  end
+
+  defp build_thinking_entry("", _idx, _timestamp), do: []
+
+  defp build_thinking_entry(thinking, idx, timestamp) do
+    [
+      %{
+        index: idx,
+        type: :thinking,
+        detail: truncate(thinking, 150),
+        timestamp: timestamp,
+        tools: []
+      }
+    ]
+  end
+
+  defp build_text_entry("", _idx, _timestamp), do: []
+
+  defp build_text_entry(text, idx, timestamp) do
+    [%{index: idx, type: :text, detail: truncate(text, 200), timestamp: timestamp, tools: []}]
+  end
+
+  defp build_tool_entries(tools, idx, timestamp) do
+    Enum.map(tools, fn {name, summary} ->
+      %{index: idx, type: :tool_use, detail: summary, timestamp: timestamp, tools: [name]}
+    end)
+  end
+
+  defp build_end_turn_entry("end_turn", [], idx, timestamp) do
+    [
+      %{
+        index: idx,
+        type: :end_turn,
+        detail: "agent finished responding",
+        timestamp: timestamp,
+        tools: []
+      }
+    ]
+  end
+
+  defp build_end_turn_entry(_stop_reason, _tools, _idx, _timestamp), do: []
+
+  # -- Entry Timestamp Backfill --
+
+  defp fill_timestamps(entries, fallback_timestamp) do
+    Enum.map(entries, fn entry ->
+      if entry.timestamp, do: entry, else: %{entry | timestamp: fallback_timestamp}
+    end)
+  end
+
+  # -- Tool Summarization --
 
   defp summarize_tool_input("Read", input) do
     path = Map.get(input, "file_path", "?")

@@ -189,6 +189,16 @@ defmodule Cortex.Orchestration.Runner do
     command = Keyword.get(opts, :command, "claude")
     continue_on_error = Keyword.get(opts, :continue_on_error, true)
 
+    with {:ok, run} <- fetch_run(run_id),
+         {:ok, _yaml} <- validate_run_config(run),
+         {:ok, _path} <- validate_run_workspace(run),
+         {:ok, config, _warnings} <- load_run_config(run),
+         {:ok, all_tiers} <- DAG.build_tiers(config.teams) do
+      Executor.execute_continuation(run, config, all_tiers, command, continue_on_error)
+    end
+  end
+
+  defp fetch_run(run_id) do
     run =
       try do
         Cortex.Store.get_run(run_id)
@@ -196,30 +206,21 @@ defmodule Cortex.Orchestration.Runner do
         _ -> nil
       end
 
-    cond do
-      is_nil(run) ->
-        {:error, :run_not_found}
+    if is_nil(run), do: {:error, :run_not_found}, else: {:ok, run}
+  end
 
-      is_nil(run.config_yaml) ->
-        {:error, :no_config_yaml}
+  defp validate_run_config(run) do
+    if is_nil(run.config_yaml), do: {:error, :no_config_yaml}, else: {:ok, run.config_yaml}
+  end
 
-      is_nil(run.workspace_path) ->
-        {:error, :no_workspace_path}
+  defp validate_run_workspace(run) do
+    if is_nil(run.workspace_path), do: {:error, :no_workspace_path}, else: {:ok, run.workspace_path}
+  end
 
-      true ->
-        case Loader.load_string(run.config_yaml) do
-          {:ok, config, _warnings} ->
-            case DAG.build_tiers(config.teams) do
-              {:ok, all_tiers} ->
-                Executor.execute_continuation(run, config, all_tiers, command, continue_on_error)
-
-              {:error, _} = err ->
-                err
-            end
-
-          {:error, errors} ->
-            {:error, {:invalid_config, errors}}
-        end
+  defp load_run_config(run) do
+    case Loader.load_string(run.config_yaml) do
+      {:ok, config, warnings} -> {:ok, config, warnings}
+      {:error, errors} -> {:error, {:invalid_config, errors}}
     end
   end
 end

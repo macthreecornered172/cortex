@@ -1,8 +1,8 @@
 defmodule Cortex.Orchestration.SummaryTest do
   use ExUnit.Case, async: true
 
-  alias Cortex.Orchestration.Summary
   alias Cortex.Orchestration.State
+  alias Cortex.Orchestration.Summary
   alias Cortex.Orchestration.TeamState
 
   @moduletag :orchestration
@@ -198,7 +198,7 @@ defmodule Cortex.Orchestration.SummaryTest do
     test "1000+ gets K suffix" do
       assert Summary.format_tokens(1000) == "1K"
       assert Summary.format_tokens(1500) == "1.5K"
-      assert Summary.format_tokens(16584) == "16.6K"
+      assert Summary.format_tokens(16_584) == "16.6K"
     end
 
     test "large counts" do

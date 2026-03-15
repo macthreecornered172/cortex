@@ -1,6 +1,8 @@
 defmodule Mix.Tasks.Cortex.ValidateTest do
   use ExUnit.Case, async: true
 
+  alias Mix.Tasks.Cortex.Validate
+
   import ExUnit.CaptureIO
 
   @moduletag :cli
@@ -102,7 +104,7 @@ defmodule Mix.Tasks.Cortex.ValidateTest do
   describe "argument parsing" do
     test "raises on missing config path" do
       assert_raise Mix.Error, ~r/Usage/, fn ->
-        Mix.Tasks.Cortex.Validate.run([])
+        Validate.run([])
       end
     end
   end
@@ -116,7 +118,7 @@ defmodule Mix.Tasks.Cortex.ValidateTest do
 
         output =
           capture_io(fn ->
-            Mix.Tasks.Cortex.Validate.run([yaml_path])
+            Validate.run([yaml_path])
           end)
 
         assert output =~ "[ok] Config valid: my-project"
@@ -152,7 +154,7 @@ defmodule Mix.Tasks.Cortex.ValidateTest do
 
         output =
           capture_io(fn ->
-            Mix.Tasks.Cortex.Validate.run([yaml_path])
+            Validate.run([yaml_path])
           end)
 
         assert output =~ "[ok] Config valid: warn-test"
@@ -171,7 +173,7 @@ defmodule Mix.Tasks.Cortex.ValidateTest do
 
         output =
           capture_io(fn ->
-            Mix.Tasks.Cortex.Validate.run([yaml_path])
+            Validate.run([yaml_path])
           end)
 
         assert output =~ "Warnings: none"
@@ -190,7 +192,7 @@ defmodule Mix.Tasks.Cortex.ValidateTest do
 
         assert catch_exit(
                  capture_io(:stderr, fn ->
-                   Mix.Tasks.Cortex.Validate.run([yaml_path])
+                   Validate.run([yaml_path])
                  end)
                ) == {:shutdown, 1}
       after
@@ -206,7 +208,7 @@ defmodule Mix.Tasks.Cortex.ValidateTest do
 
         assert catch_exit(
                  capture_io(:stderr, fn ->
-                   Mix.Tasks.Cortex.Validate.run([yaml_path])
+                   Validate.run([yaml_path])
                  end)
                ) == {:shutdown, 1}
       after
@@ -217,7 +219,7 @@ defmodule Mix.Tasks.Cortex.ValidateTest do
     test "prints errors for nonexistent file" do
       assert catch_exit(
                capture_io(:stderr, fn ->
-                 Mix.Tasks.Cortex.Validate.run(["/nonexistent/orchestra.yaml"])
+                 Validate.run(["/nonexistent/orchestra.yaml"])
                end)
              ) == {:shutdown, 1}
     end

@@ -28,6 +28,10 @@ defmodule Mix.Tasks.Cortex.Run do
 
   use Mix.Task
 
+  alias Cortex.Gossip.Coordinator
+  alias Cortex.Orchestration.Runner
+  alias Cortex.Orchestration.Summary
+
   @impl Mix.Task
   def run(args) do
     {opts, positional, _invalid} =
@@ -70,7 +74,7 @@ defmodule Mix.Tasks.Cortex.Run do
   defp run_gossip(config_path, opts) do
     Mix.shell().info("\n=> Cortex Gossip Engine\n")
 
-    case Cortex.Gossip.Coordinator.run(config_path, opts) do
+    case Coordinator.run(config_path, opts) do
       {:ok, %{status: :dry_run} = plan} ->
         Mix.shell().info(format_gossip_dry_run(plan))
 
@@ -97,7 +101,7 @@ defmodule Mix.Tasks.Cortex.Run do
   defp run_dag(config_path, opts) do
     Mix.shell().info("\n=> Cortex Orchestration Engine\n")
 
-    case Cortex.Orchestration.Runner.run(config_path, opts) do
+    case Runner.run(config_path, opts) do
       {:ok, %{status: :dry_run} = plan} ->
         Mix.shell().info(format_dry_run(plan))
 
@@ -171,7 +175,7 @@ defmodule Mix.Tasks.Cortex.Run do
 
     wall_clock =
       if Map.has_key?(summary, :wall_clock_ms),
-        do: Cortex.Orchestration.Summary.format_duration(summary.wall_clock_ms),
+        do: Summary.format_duration(summary.wall_clock_ms),
         else: "--"
 
     lines =

@@ -440,26 +440,30 @@ defmodule Cortex.Gossip.Coordinator do
       findings_path =
         Path.join([workspace_path, ".cortex", "knowledge", agent.name, "findings.json"])
 
-      case read_findings(findings_path) do
-        {:ok, findings} ->
-          pid = Map.fetch!(stores, agent.name)
-
-          Enum.each(findings, fn finding ->
-            entry =
-              Entry.new(
-                topic: Map.get(finding, "topic", agent.topic),
-                content: Map.get(finding, "content", ""),
-                source: agent.name,
-                confidence: Map.get(finding, "confidence", 0.5)
-              )
-
-            KnowledgeStore.put(pid, entry)
-          end)
-
-        {:error, _reason} ->
-          :ok
-      end
+      ingest_agent_findings(stores, agent, findings_path)
     end)
+  end
+
+  defp ingest_agent_findings(stores, agent, findings_path) do
+    case read_findings(findings_path) do
+      {:ok, findings} ->
+        pid = Map.fetch!(stores, agent.name)
+
+        Enum.each(findings, fn finding ->
+          entry =
+            Entry.new(
+              topic: Map.get(finding, "topic", agent.topic),
+              content: Map.get(finding, "content", ""),
+              source: agent.name,
+              confidence: Map.get(finding, "confidence", 0.5)
+            )
+
+          KnowledgeStore.put(pid, entry)
+        end)
+
+      {:error, _reason} ->
+        :ok
+    end
   end
 
   @spec read_findings(String.t()) :: {:ok, [map()]} | {:error, term()}
@@ -591,72 +595,11 @@ defmodule Cortex.Gossip.Coordinator do
   @spec build_summary(GossipConfig.t(), list(), [Entry.t()], non_neg_integer()) ::
           {:ok, map()}
   defp build_summary(config, results, entries, run_duration) do
-    agent_results =
-      Map.new(results, fn {name, _status, data} ->
-        result_info =
-          case data do
-            %{type: :success, result: result} ->
-              %{
-                status: :success,
-                cost_usd: result.cost_usd,
-                input_tokens: result.input_tokens,
-                output_tokens: result.output_tokens,
-                duration_ms: result.duration_ms,
-                result_summary: truncate(result.result, 2000)
-              }
-
-            %{type: :failure, result: result} ->
-              %{
-                status: :failed,
-                cost_usd: result.cost_usd,
-                result_summary: truncate(result.result, 2000)
-              }
-
-            %{type: :error, reason: reason} ->
-              %{status: :error, reason: inspect(reason)}
-          end
-
-        {name, result_info}
-      end)
-
-    total_cost =
-      results
-      |> Enum.map(fn {_name, _status, data} ->
-        case data do
-          %{result: %{cost_usd: cost}} when is_number(cost) -> cost
-          _ -> 0.0
-        end
-      end)
-      |> Enum.sum()
-
-    total_input_tokens =
-      results
-      |> Enum.map(fn {_name, _status, data} ->
-        case data do
-          %{result: %{input_tokens: t}} when is_number(t) -> t
-          _ -> 0
-        end
-      end)
-      |> Enum.sum()
-
-    total_output_tokens =
-      results
-      |> Enum.map(fn {_name, _status, data} ->
-        case data do
-          %{result: %{output_tokens: t}} when is_number(t) -> t
-          _ -> 0
-        end
-      end)
-      |> Enum.sum()
-
-    # Group entries by topic for the summary
-    knowledge_by_topic =
-      entries
-      |> Enum.group_by(& &1.topic)
-      |> Enum.map(fn {topic, entries} ->
-        {topic, length(entries)}
-      end)
-      |> Map.new()
+    agent_results = build_agent_results(results)
+    total_cost = sum_result_field(results, :cost_usd, 0.0)
+    total_input_tokens = sum_result_field(results, :input_tokens, 0)
+    total_output_tokens = sum_result_field(results, :output_tokens, 0)
+    knowledge_by_topic = group_entries_by_topic(entries)
 
     overall_status =
       if Enum.all?(results, fn {_name, status, _data} -> status == :ok end),
@@ -682,6 +625,53 @@ defmodule Cortex.Gossip.Coordinator do
          entries: Enum.map(entries, &entry_to_map/1)
        }
      }}
+  end
+
+  defp build_agent_results(results) do
+    Map.new(results, fn {name, _status, data} ->
+      {name, agent_result_info(data)}
+    end)
+  end
+
+  defp agent_result_info(%{type: :success, result: result}) do
+    %{
+      status: :success,
+      cost_usd: result.cost_usd,
+      input_tokens: result.input_tokens,
+      output_tokens: result.output_tokens,
+      duration_ms: result.duration_ms,
+      result_summary: truncate(result.result, 2000)
+    }
+  end
+
+  defp agent_result_info(%{type: :failure, result: result}) do
+    %{
+      status: :failed,
+      cost_usd: result.cost_usd,
+      result_summary: truncate(result.result, 2000)
+    }
+  end
+
+  defp agent_result_info(%{type: :error, reason: reason}) do
+    %{status: :error, reason: inspect(reason)}
+  end
+
+  defp sum_result_field(results, field, default) do
+    results
+    |> Enum.map(fn {_name, _status, data} ->
+      case data do
+        %{result: result} -> Map.get(result, field) || default
+        _ -> default
+      end
+    end)
+    |> Enum.sum()
+  end
+
+  defp group_entries_by_topic(entries) do
+    entries
+    |> Enum.group_by(& &1.topic)
+    |> Enum.map(fn {topic, topic_entries} -> {topic, length(topic_entries)} end)
+    |> Map.new()
   end
 
   @spec entry_to_map(Entry.t()) :: map()

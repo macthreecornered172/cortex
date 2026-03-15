@@ -9,6 +9,8 @@ defmodule CortexWeb.ConnCase do
 
   use ExUnit.CaseTemplate
 
+  alias Ecto.Adapters.SQL.Sandbox
+
   using do
     quote do
       import Plug.Conn
@@ -20,8 +22,8 @@ defmodule CortexWeb.ConnCase do
 
   setup _tags do
     # Check out a DB connection for tests that need Ecto sandbox
-    pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Cortex.Repo, caller: self())
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+    pid = Sandbox.start_owner!(Cortex.Repo, caller: self())
+    on_exit(fn -> Sandbox.stop_owner(pid) end)
 
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end

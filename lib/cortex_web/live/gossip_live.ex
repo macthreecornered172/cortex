@@ -8,6 +8,7 @@ defmodule CortexWeb.GossipLive do
 
   use CortexWeb, :live_view
 
+  alias Cortex.Gossip.Coordinator
   alias Cortex.Gossip.{Config, Entry, Topology}
 
   @impl true
@@ -638,25 +639,7 @@ defmodule CortexWeb.GossipLive do
 
       selected_peers = if selected, do: Map.get(topology, selected, []), else: []
 
-      edges =
-        topology
-        |> Enum.flat_map(fn {from, peers} ->
-          Enum.map(peers, fn to ->
-            if from < to, do: {from, to}, else: {to, from}
-          end)
-        end)
-        |> Enum.uniq()
-        |> Enum.map(fn {from, to} ->
-          {fx, fy} = Map.get(positions, from, {0, 0})
-          {tx, ty} = Map.get(positions, to, {0, 0})
-
-          highlighted =
-            selected != nil and
-              ((from == selected and to in selected_peers) or
-                 (to == selected and from in selected_peers))
-
-          %{x1: fx, y1: fy, x2: tx, y2: ty, highlighted: highlighted}
-        end)
+      edges = build_svg_edges(topology, positions, selected, selected_peers)
 
       node_circles =
         Enum.map(nodes, fn node ->
@@ -753,6 +736,25 @@ defmodule CortexWeb.GossipLive do
     end
   end
 
+  defp build_svg_edges(topology, positions, selected, selected_peers) do
+    topology
+    |> Enum.flat_map(fn {from, peers} ->
+      Enum.map(peers, fn to -> if from < to, do: {from, to}, else: {to, from} end)
+    end)
+    |> Enum.uniq()
+    |> Enum.map(fn {from, to} ->
+      {fx, fy} = Map.get(positions, from, {0, 0})
+      {tx, ty} = Map.get(positions, to, {0, 0})
+
+      highlighted =
+        selected != nil and
+          ((from == selected and to in selected_peers) or
+             (to == selected and from in selected_peers))
+
+      %{x1: fx, y1: fy, x2: tx, y2: ty, highlighted: highlighted}
+    end)
+  end
+
   # -- Helpers --
 
   defp safe_subscribe do
@@ -793,7 +795,7 @@ defmodule CortexWeb.GossipLive do
 
       try do
         {:ok, _summary} =
-          Cortex.Gossip.Coordinator.run_config(config,
+          Coordinator.run_config(config,
             workspace_path: workspace_path
           )
 

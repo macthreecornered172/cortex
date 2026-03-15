@@ -141,24 +141,29 @@ defmodule Cortex.Orchestration.Spawner do
   @spec extract_session_id_from_log(String.t()) :: {:ok, String.t()} | :error
   def extract_session_id_from_log(log_path) do
     case File.read(log_path) do
-      {:ok, content} ->
-        content
-        |> String.split("\n")
-        |> Enum.find_value(:error, fn line ->
-          case Jason.decode(String.trim(line)) do
-            {:ok, %{"type" => "system", "subtype" => "init", "session_id" => sid}} ->
-              {:ok, sid}
+      {:ok, content} -> find_session_id_in_content(content)
+      {:error, _} -> :error
+    end
+  end
 
-            {:ok, %{"type" => "result", "session_id" => sid}} when is_binary(sid) ->
-              {:ok, sid}
+  defp find_session_id_in_content(content) do
+    content
+    |> String.split("\n")
+    |> Enum.find_value(:error, fn line ->
+      extract_session_id_from_line(String.trim(line))
+    end)
+  end
 
-            _ ->
-              nil
-          end
-        end)
+  defp extract_session_id_from_line(line) do
+    case Jason.decode(line) do
+      {:ok, %{"type" => "system", "subtype" => "init", "session_id" => sid}} ->
+        {:ok, sid}
 
-      {:error, _} ->
-        :error
+      {:ok, %{"type" => "result", "session_id" => sid}} when is_binary(sid) ->
+        {:ok, sid}
+
+      _ ->
+        nil
     end
   end
 
@@ -465,31 +470,37 @@ defmodule Cortex.Orchestration.Spawner do
 
   defp extract_activity(_), do: nil
 
-  # Extract a brief detail string from a tool_use content block's input
+  # Extract a brief detail string from a tool_use content block's input.
+  # Split into per-tool functions to reduce cyclomatic complexity.
   @spec tool_detail(map()) :: String.t() | nil
   defp tool_detail(%{"name" => name, "input" => input}) when is_map(input) do
-    case name do
-      "Bash" -> input |> Map.get("command", "") |> truncate_detail(80)
-      "Read" -> input |> Map.get("file_path", "") |> Path.basename()
-      "Write" -> input |> Map.get("file_path", "") |> Path.basename()
-      "Edit" -> input |> Map.get("file_path", "") |> Path.basename()
-      "Grep" -> input |> Map.get("pattern", "") |> truncate_detail(50)
-      "Glob" -> input |> Map.get("pattern", "") |> truncate_detail(50)
-      "Agent" -> input |> Map.get("description", "") |> truncate_detail(50)
-      "WebSearch" -> input |> Map.get("query", "") |> truncate_detail(50)
-      "WebFetch" -> input |> Map.get("url", "") |> truncate_detail(60)
-      _ -> nil
-    end
+    tool_detail_for(name, input)
   end
 
   defp tool_detail(_), do: nil
+
+  defp tool_detail_for("Bash", input), do: input |> Map.get("command", "") |> truncate_detail(80)
+  defp tool_detail_for("Read", input), do: input |> Map.get("file_path", "") |> Path.basename()
+  defp tool_detail_for("Write", input), do: input |> Map.get("file_path", "") |> Path.basename()
+  defp tool_detail_for("Edit", input), do: input |> Map.get("file_path", "") |> Path.basename()
+  defp tool_detail_for("Grep", input), do: input |> Map.get("pattern", "") |> truncate_detail(50)
+  defp tool_detail_for("Glob", input), do: input |> Map.get("pattern", "") |> truncate_detail(50)
+
+  defp tool_detail_for("Agent", input),
+    do: input |> Map.get("description", "") |> truncate_detail(50)
+
+  defp tool_detail_for("WebSearch", input),
+    do: input |> Map.get("query", "") |> truncate_detail(50)
+
+  defp tool_detail_for("WebFetch", input), do: input |> Map.get("url", "") |> truncate_detail(60)
+  defp tool_detail_for(_, _input), do: nil
 
   @spec truncate_detail(String.t(), pos_integer()) :: String.t() | nil
   defp truncate_detail("", _max), do: nil
 
   defp truncate_detail(str, max) do
     if String.length(str) > max do
-      String.slice(str, 0, max) <> "…"
+      String.slice(str, 0, max) <> "..."
     else
       str
     end

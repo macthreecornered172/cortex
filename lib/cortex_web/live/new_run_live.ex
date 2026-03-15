@@ -5,6 +5,7 @@ defmodule CortexWeb.NewRunLive do
 
   alias Cortex.Orchestration.Config.Loader
   alias Cortex.Orchestration.DAG
+  alias Cortex.Orchestration.Runner
 
   @impl true
   def mount(_params, _session, socket) do
@@ -65,37 +66,19 @@ defmodule CortexWeb.NewRunLive do
          edges: []
        )}
     else
-      case Loader.load_string(yaml) do
+      case validate_config(yaml, workspace_path) do
         {:ok, config, warnings} ->
-          ui_ws = String.trim(workspace_path)
-          yaml_ws = config.workspace_path
+          {tiers, edges} = build_preview_dag(config)
 
-          has_ui = ui_ws != ""
-          has_yaml = yaml_ws != nil && yaml_ws != ""
-
-          if has_ui && has_yaml do
-            {:noreply,
-             assign(socket,
-               validation_result: :error,
-               errors: ["workspace_path is set in both YAML and the form — use only one"],
-               warnings: [],
-               config: nil,
-               tiers: [],
-               edges: []
-             )}
-          else
-            {tiers, edges} = build_preview_dag(config)
-
-            {:noreply,
-             assign(socket,
-               validation_result: :ok,
-               config: config,
-               tiers: tiers,
-               edges: edges,
-               errors: [],
-               warnings: warnings
-             )}
-          end
+          {:noreply,
+           assign(socket,
+             validation_result: :ok,
+             config: config,
+             tiers: tiers,
+             edges: edges,
+             errors: [],
+             warnings: warnings
+           )}
 
         {:error, errors} ->
           {:noreply,
@@ -310,6 +293,26 @@ defmodule CortexWeb.NewRunLive do
     end
   end
 
+  defp validate_config(yaml, workspace_path) do
+    case Loader.load_string(yaml) do
+      {:ok, config, warnings} ->
+        ui_ws = String.trim(workspace_path)
+        yaml_ws = config.workspace_path
+
+        has_ui = ui_ws != ""
+        has_yaml = yaml_ws != nil && yaml_ws != ""
+
+        if has_ui && has_yaml do
+          {:error, ["workspace_path is set in both YAML and the form — use only one"]}
+        else
+          {:ok, config, warnings}
+        end
+
+      {:error, errors} ->
+        {:error, errors}
+    end
+  end
+
   defp build_preview_dag(config) do
     teams =
       Enum.map(config.teams, fn t ->
@@ -317,17 +320,15 @@ defmodule CortexWeb.NewRunLive do
       end)
 
     case DAG.build_tiers(teams) do
-      {:ok, tiers} ->
-        edges =
-          Enum.flat_map(teams, fn team ->
-            Enum.map(team.depends_on, fn dep -> {dep, team.name} end)
-          end)
-
-        {tiers, edges}
-
-      _ ->
-        {[], []}
+      {:ok, tiers} -> {tiers, build_edges(teams)}
+      _ -> {[], []}
     end
+  end
+
+  defp build_edges(teams) do
+    Enum.flat_map(teams, fn team ->
+      Enum.map(team.depends_on, fn dep -> {dep, team.name} end)
+    end)
   end
 
   defp preview_teams(config) do
@@ -380,7 +381,7 @@ defmodule CortexWeb.NewRunLive do
 
       try do
         result =
-          Cortex.Orchestration.Runner.run(tmp_path,
+          Runner.run(tmp_path,
             workspace_path: workspace_path,
             run_id: run_id,
             coordinator: true
