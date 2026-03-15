@@ -1,5 +1,5 @@
 defmodule Mix.Tasks.Cortex.RunTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   import ExUnit.CaptureIO
 

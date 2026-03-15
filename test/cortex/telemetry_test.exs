@@ -27,7 +27,7 @@ defmodule Cortex.TelemetryTest do
     test "returns all defined event names" do
       names = Telemetry.event_names()
       assert is_list(names)
-      assert length(names) == 8
+      assert length(names) == 9
 
       assert [:cortex, :agent, :started] in names
       assert [:cortex, :agent, :stopped] in names
@@ -35,6 +35,7 @@ defmodule Cortex.TelemetryTest do
       assert [:cortex, :run, :completed] in names
       assert [:cortex, :tier, :completed] in names
       assert [:cortex, :team, :completed] in names
+      assert [:cortex, :team, :tokens_updated] in names
       assert [:cortex, :gossip, :exchange] in names
       assert [:cortex, :tool, :executed] in names
     end

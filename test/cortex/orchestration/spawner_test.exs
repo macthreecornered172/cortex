@@ -111,13 +111,13 @@ defmodule Cortex.Orchestration.SpawnerTest do
         sleep 300
         """)
 
-      # Use a short timeout (5 seconds = 5/60 minute).
+      # Use a short timeout (1 second = 1/60 minute).
       # Must be long enough for the shell to start and emit the echo line
-      # before the timer fires, even on a loaded system.
+      # before the timer fires.
       opts =
         tmp_dir
         |> base_opts(script)
-        |> Keyword.put(:timeout_minutes, 5 / 60)
+        |> Keyword.put(:timeout_minutes, 1 / 60)
 
       start = System.monotonic_time(:millisecond)
       result = Spawner.spawn(opts)
@@ -125,8 +125,8 @@ defmodule Cortex.Orchestration.SpawnerTest do
 
       assert {:ok, %TeamResult{status: :timeout, team: "test-team"}} = result
 
-      # Should have returned well within 15 seconds (timeout is ~5s)
-      assert elapsed < 15_000
+      # Should have returned well within 5 seconds (timeout is ~1s)
+      assert elapsed < 5_000
     end
   end
 
@@ -227,6 +227,44 @@ defmodule Cortex.Orchestration.SpawnerTest do
       assert_raise KeyError, ~r/:prompt/, fn ->
         Spawner.spawn(team_name: "test")
       end
+    end
+  end
+
+  describe "spawn/1 live token streaming" do
+    test "calls on_token_update callback with accumulated usage", %{tmp_dir: tmp_dir} do
+      script =
+        write_mock_script(tmp_dir, "tokens.sh", """
+        echo '{"type":"system","subtype":"init","session_id":"tok-sess"}'
+        echo '{"type":"message_start","message":{"usage":{"input_tokens":100,"output_tokens":0}}}'
+        echo '{"type":"message_delta","usage":{"output_tokens":50}}'
+        echo '{"type":"message_start","message":{"usage":{"input_tokens":200,"output_tokens":0}}}'
+        echo '{"type":"message_delta","usage":{"output_tokens":75}}'
+        echo '{"type":"result","subtype":"success","result":"Done","cost_usd":0.10,"num_turns":2,"duration_ms":5000,"usage":{"input_tokens":300,"output_tokens":125}}'
+        """)
+
+      test_pid = self()
+
+      on_token_update = fn team_name, tokens ->
+        send(test_pid, {:token_update, team_name, tokens})
+      end
+
+      opts = base_opts(tmp_dir, script) ++ [on_token_update: on_token_update]
+
+      assert {:ok, %TeamResult{}} = Spawner.spawn(opts)
+
+      # Should have received at least one token update
+      assert_received {:token_update, "test-team", tokens}
+      assert tokens.input_tokens > 0 or tokens.output_tokens > 0
+    end
+
+    test "does not crash when on_token_update is nil", %{tmp_dir: tmp_dir} do
+      script =
+        write_mock_script(tmp_dir, "no_cb.sh", """
+        echo '{"type":"message_start","message":{"usage":{"input_tokens":100,"output_tokens":50}}}'
+        echo '{"type":"result","subtype":"success","result":"Done","cost_usd":0.01,"num_turns":1,"duration_ms":1000}'
+        """)
+
+      assert {:ok, %TeamResult{}} = Spawner.spawn(base_opts(tmp_dir, script))
     end
   end
 

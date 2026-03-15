@@ -38,7 +38,7 @@ defmodule Cortex.Orchestration.TeamResult do
     :session_id
   ]
 
-  @type status :: :success | :error | :timeout
+  @type status :: :success | :error | :timeout | :rate_limited
 
   @type t :: %__MODULE__{
           team: String.t(),

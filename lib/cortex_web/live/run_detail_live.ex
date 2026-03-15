@@ -5,6 +5,8 @@ defmodule CortexWeb.RunDetailLive do
 
   alias Cortex.Orchestration.DAG
 
+  @max_activities 150
+
   @impl true
   def mount(%{"id" => id}, _session, socket) do
     if connected?(socket), do: safe_subscribe()
@@ -19,14 +21,16 @@ defmodule CortexWeb.RunDetailLive do
            team_runs: [],
            tiers: [],
            edges: [],
+           activities: [],
+           team_members: %{},
            page_title: "Run Not Found"
          )}
 
       run ->
         team_runs = safe_get_team_runs(run.id)
         {tiers, edges} = build_dag(run, team_runs)
-
         team_members = extract_team_members(run)
+        team_names = Enum.map(team_runs, & &1.team_name)
 
         {:ok,
          assign(socket,
@@ -35,10 +39,16 @@ defmodule CortexWeb.RunDetailLive do
            tiers: tiers,
            edges: edges,
            team_members: team_members,
+           team_names: team_names,
+           activities: [],
+           msg_to: "",
+           msg_content: "",
            page_title: "Run: #{run.name}"
          )}
     end
   end
+
+  # -- Event handlers: lifecycle events (re-fetch from DB) --
 
   @impl true
   def handle_info(%{type: type, payload: _payload}, socket)
@@ -69,7 +79,157 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
+  # -- Event handlers: live token updates --
+
+  def handle_info(%{type: :team_tokens_updated, payload: payload}, socket) do
+    run = socket.assigns.run
+
+    if run && Map.get(payload, :run_id) == run.id do
+      team_name = payload.team_name
+
+      team_runs =
+        Enum.map(socket.assigns.team_runs, fn tr ->
+          if tr.team_name == team_name do
+            %{tr | input_tokens: payload.input_tokens, output_tokens: payload.output_tokens}
+          else
+            tr
+          end
+        end)
+
+      total_input =
+        team_runs |> Enum.map(& &1.input_tokens) |> Enum.reject(&is_nil/1) |> Enum.sum()
+
+      total_output =
+        team_runs |> Enum.map(& &1.output_tokens) |> Enum.reject(&is_nil/1) |> Enum.sum()
+
+      updated_run = %{run | total_input_tokens: total_input, total_output_tokens: total_output}
+
+      {:noreply, assign(socket, team_runs: team_runs, run: updated_run)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # -- Event handlers: activity feed --
+
+  def handle_info(%{type: :team_activity, payload: payload}, socket) do
+    run = socket.assigns.run
+
+    if run && Map.get(payload, :run_id) == run.id do
+      tools = Map.get(payload, :tools, [])
+      tool_str = Enum.join(tools, ", ")
+
+      entry = %{
+        team: payload.team_name,
+        text: "using #{tool_str}",
+        kind: :tool,
+        at: format_now()
+      }
+
+      activities = prepend_activity(socket.assigns.activities, entry)
+      {:noreply, assign(socket, activities: activities)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(%{type: :team_progress, payload: payload}, socket) do
+    run = socket.assigns.run
+
+    if run && Map.get(payload, :run_id) == run.id do
+      message = Map.get(payload, :message, %{})
+      content = Map.get(message, "content", Map.get(message, :content, ""))
+
+      entry = %{
+        team: payload.team_name,
+        text: truncate(to_string(content), 200),
+        kind: :progress,
+        at: format_now()
+      }
+
+      activities = prepend_activity(socket.assigns.activities, entry)
+      {:noreply, assign(socket, activities: activities)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
+
+  # -- Event handlers: message sending --
+
+  @impl true
+  def handle_event("send_message", %{"to" => to, "content" => content}, socket) do
+    run = socket.assigns.run
+
+    if run && to != "" && content != "" do
+      workspace_path = run.workspace_path
+
+      if workspace_path do
+        Cortex.Orchestration.Runner.send_message(workspace_path, "coordinator", to, content)
+
+        entry = %{
+          team: "coordinator",
+          text: "sent to #{to}: #{truncate(content, 100)}",
+          kind: :message,
+          at: format_now()
+        }
+
+        activities = prepend_activity(socket.assigns.activities, entry)
+
+        {:noreply,
+         socket
+         |> assign(activities: activities, msg_content: "")
+         |> put_flash(:info, "Message sent to #{to}")}
+      else
+        {:noreply, put_flash(socket, :error, "No workspace path — cannot send messages")}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("resume_dead_teams", _params, socket) do
+    run = socket.assigns.run
+
+    if run && run.workspace_path do
+      entry = %{
+        team: "system",
+        text: "Resuming dead teams...",
+        kind: :message,
+        at: format_now()
+      }
+
+      socket = assign(socket, activities: prepend_activity(socket.assigns.activities, entry))
+
+      # Run resume in a background task so LiveView stays responsive
+      Task.start(fn ->
+        case Cortex.Orchestration.Runner.resume_run(run.workspace_path) do
+          {:ok, results} ->
+            Cortex.Events.broadcast(:run_resumed, %{
+              run_id: run.id,
+              results: Map.keys(results)
+            })
+
+          {:error, reason} ->
+            require Logger
+            Logger.error("Resume failed: #{inspect(reason)}")
+        end
+      end)
+
+      {:noreply, put_flash(socket, :info, "Resuming dead teams...")}
+    else
+      {:noreply, put_flash(socket, :error, "No workspace path — cannot resume")}
+    end
+  end
+
+  def handle_event("form_update", params, socket) do
+    {:noreply,
+     assign(socket,
+       msg_to: Map.get(params, "to", socket.assigns.msg_to),
+       msg_content: Map.get(params, "content", socket.assigns.msg_content)
+     )}
+  end
 
   @impl true
   def render(assigns) do
@@ -100,6 +260,44 @@ defmodule CortexWeb.RunDetailLive do
         </:actions>
       </.header>
 
+      <!-- Resume Banner (shown when dead teams detected) -->
+      <%= if has_dead_teams?(@team_runs, @run.status) do %>
+        <div class="bg-yellow-900/30 border border-yellow-800 rounded-lg p-4 mb-6 flex items-center justify-between">
+          <div>
+            <p class="text-yellow-300 font-medium">Dead teams detected</p>
+            <p class="text-yellow-200/70 text-sm">
+              {count_by_status(@team_runs, "running")} team(s) appear to have crashed. Sessions can be resumed.
+            </p>
+          </div>
+          <button
+            phx-click="resume_dead_teams"
+            class="rounded bg-yellow-600 px-4 py-2 text-sm font-medium text-white hover:bg-yellow-500 shrink-0"
+          >
+            Resume Dead Teams
+          </button>
+        </div>
+      <% end %>
+
+      <!-- Status Summary -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <div class="bg-gray-900 rounded-lg border border-gray-800 p-3 text-center">
+          <p class="text-xs text-gray-500 uppercase">Pending</p>
+          <p class="text-lg font-bold text-gray-400">{count_by_status(@team_runs, "pending")}</p>
+        </div>
+        <div class="bg-gray-900 rounded-lg border border-blue-900 p-3 text-center">
+          <p class="text-xs text-blue-400 uppercase">Running</p>
+          <p class="text-lg font-bold text-blue-300">{count_by_status(@team_runs, "running")}</p>
+        </div>
+        <div class="bg-gray-900 rounded-lg border border-green-900 p-3 text-center">
+          <p class="text-xs text-green-400 uppercase">Done</p>
+          <p class="text-lg font-bold text-green-300">{count_by_status(@team_runs, ["completed", "done"])}</p>
+        </div>
+        <div class="bg-gray-900 rounded-lg border border-red-900 p-3 text-center">
+          <p class="text-xs text-red-400 uppercase">Failed</p>
+          <p class="text-lg font-bold text-red-300">{count_by_status(@team_runs, "failed")}</p>
+        </div>
+      </div>
+
       <!-- DAG Visualization -->
       <%= if @tiers != [] do %>
         <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
@@ -120,7 +318,7 @@ defmodule CortexWeb.RunDetailLive do
           <p class="text-gray-400">No teams recorded for this run.</p>
         </div>
       <% else %>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
           <a
             :for={team <- @team_runs}
             href={"/runs/#{@run.id}/teams/#{team.team_name}"}
@@ -151,6 +349,68 @@ defmodule CortexWeb.RunDetailLive do
           </a>
         </div>
       <% end %>
+
+      <!-- Activity Feed + Message Panel -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Activity Feed (2/3 width) -->
+        <div class="lg:col-span-2 bg-gray-900 rounded-lg border border-gray-800 p-4">
+          <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Activity Feed</h2>
+          <%= if @activities == [] do %>
+            <p class="text-gray-500 text-sm">No activity yet. Events will appear here in real-time.</p>
+          <% else %>
+            <div class="space-y-1 max-h-80 overflow-y-auto" id="activity-feed">
+              <div :for={entry <- Enum.take(@activities, 50)} class="flex items-start gap-2 text-sm py-1">
+                <span class="text-gray-600 text-xs shrink-0 mt-0.5">{entry.at}</span>
+                <span class={activity_icon_class(entry.kind)}>{activity_icon(entry.kind)}</span>
+                <span class="text-cortex-400 font-medium shrink-0">{entry.team}:</span>
+                <span class="text-gray-300">{entry.text}</span>
+              </div>
+            </div>
+          <% end %>
+        </div>
+
+        <!-- Send Message (1/3 width) -->
+        <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+          <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Send Message</h2>
+          <%= if @run.status == "running" and @run.workspace_path do %>
+            <form phx-submit="send_message" phx-change="form_update" class="space-y-3">
+              <div>
+                <label class="text-xs text-gray-500 block mb-1">To</label>
+                <select
+                  name="to"
+                  class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
+                >
+                  <option value="">Select team...</option>
+                  <option :for={name <- @team_names} value={name}>{name}</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-xs text-gray-500 block mb-1">Message</label>
+                <textarea
+                  name="content"
+                  rows="3"
+                  class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300 resize-y"
+                  placeholder="Type your message..."
+                ><%= @msg_content %></textarea>
+              </div>
+              <button
+                type="submit"
+                class="w-full rounded bg-cortex-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-cortex-500"
+              >
+                Send
+              </button>
+            </form>
+          <% else %>
+            <p class="text-gray-500 text-sm">
+              <%= if @run.status == "running" do %>
+                No workspace path available for messaging.
+              <% else %>
+                Messaging available only during active runs.
+              <% end %>
+            </p>
+          <% end %>
+        </div>
+      </div>
     <% end %>
     """
   end
@@ -176,7 +436,6 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   defp build_dag(run, team_runs) do
-    # Try to build tiers from config_yaml, fall back to team_runs tier data
     teams_for_dag = build_teams_for_dag(run, team_runs)
 
     case DAG.build_tiers(teams_for_dag) do
@@ -185,7 +444,6 @@ defmodule CortexWeb.RunDetailLive do
         {tiers, edges}
 
       _ ->
-        # Fallback: group by tier field on team_runs
         tiers = build_tiers_from_team_runs(team_runs)
         {tiers, []}
     end
@@ -263,4 +521,45 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   defp run_title(run), do: run.name || "Untitled Run"
+
+  defp has_dead_teams?(team_runs, run_status) do
+    # Show resume banner when run status is "running" or "failed"
+    # and there are teams stuck in "running" state
+    run_status in ["running", "failed"] and
+      Enum.any?(team_runs, fn tr -> (tr.status || "pending") == "running" end)
+  end
+
+  defp count_by_status(team_runs, statuses) when is_list(statuses) do
+    Enum.count(team_runs, fn tr -> (tr.status || "pending") in statuses end)
+  end
+
+  defp count_by_status(team_runs, status) do
+    Enum.count(team_runs, fn tr -> (tr.status || "pending") == status end)
+  end
+
+  defp prepend_activity(activities, entry) do
+    [entry | activities] |> Enum.take(@max_activities)
+  end
+
+  defp format_now do
+    DateTime.utc_now() |> Calendar.strftime("%H:%M:%S")
+  end
+
+  defp truncate(text, max) do
+    if String.length(text) > max do
+      String.slice(text, 0, max) <> "..."
+    else
+      text
+    end
+  end
+
+  defp activity_icon(:tool), do: ">"
+  defp activity_icon(:progress), do: "*"
+  defp activity_icon(:message), do: "@"
+  defp activity_icon(_), do: "-"
+
+  defp activity_icon_class(:tool), do: "text-blue-400 font-mono"
+  defp activity_icon_class(:progress), do: "text-green-400 font-mono"
+  defp activity_icon_class(:message), do: "text-yellow-400 font-mono"
+  defp activity_icon_class(_), do: "text-gray-400 font-mono"
 end

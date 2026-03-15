@@ -63,6 +63,16 @@ defmodule CortexWeb.Telemetry do
         description: "Team cost in USD"
       ),
 
+      # Cortex live token metrics
+      last_value("cortex.team.tokens_updated.input_tokens",
+        description: "Running input token count per team",
+        tags: [:team_name]
+      ),
+      last_value("cortex.team.tokens_updated.output_tokens",
+        description: "Running output token count per team",
+        tags: [:team_name]
+      ),
+
       # Cortex gossip metrics
       summary("cortex.gossip.exchange.duration_us",
         description: "Gossip exchange duration in microseconds",

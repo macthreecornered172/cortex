@@ -28,7 +28,15 @@ defmodule CortexWeb.NewRunLive do
     yaml = Map.get(params, "yaml", socket.assigns.yaml_content)
     path = Map.get(params, "path", socket.assigns.file_path)
     workspace = Map.get(params, "workspace_path", socket.assigns.workspace_path)
-    {:noreply, assign(socket, yaml_content: yaml, file_path: path, workspace_path: workspace, validation_result: nil, config: nil)}
+
+    {:noreply,
+     assign(socket,
+       yaml_content: yaml,
+       file_path: path,
+       workspace_path: workspace,
+       validation_result: nil,
+       config: nil
+     )}
   end
 
   def handle_event("validate", params, socket) do
@@ -36,7 +44,13 @@ defmodule CortexWeb.NewRunLive do
     yaml_content = Map.get(params, "yaml", socket.assigns.yaml_content)
     file_path = Map.get(params, "path", socket.assigns.file_path)
     workspace_path = Map.get(params, "workspace_path", socket.assigns.workspace_path)
-    socket = assign(socket, yaml_content: yaml_content, file_path: file_path, workspace_path: workspace_path)
+
+    socket =
+      assign(socket,
+        yaml_content: yaml_content,
+        file_path: file_path,
+        workspace_path: workspace_path
+      )
 
     yaml = effective_yaml(socket)
 
@@ -115,12 +129,15 @@ defmodule CortexWeb.NewRunLive do
           config
         end
 
+      workspace_path = resolve_workspace_path(config, "pending")
+
       run_attrs = %{
         name: config.name,
         config_yaml: yaml,
         status: "pending",
         team_count: length(config.teams),
-        started_at: DateTime.utc_now()
+        started_at: DateTime.utc_now(),
+        workspace_path: workspace_path
       }
 
       case safe_create_run(run_attrs) do

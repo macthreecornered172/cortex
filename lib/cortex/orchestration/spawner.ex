@@ -62,6 +62,8 @@ defmodule Cortex.Orchestration.Spawner do
     log_path = Keyword.get(opts, :log_path)
     command = Keyword.get(opts, :command, @default_command)
     cwd = Keyword.get(opts, :cwd)
+    on_token_update = Keyword.get(opts, :on_token_update)
+    on_activity = Keyword.get(opts, :on_activity)
 
     args = build_args(prompt, model, max_turns, permission_mode)
     command_path = resolve_command(command)
@@ -73,7 +75,9 @@ defmodule Cortex.Orchestration.Spawner do
       port = open_port(command_path, args, cwd)
       timer_ref = Process.send_after(self(), {:spawner_timeout, port}, timeout_ms)
 
-      result = collect_output(port, timer_ref, team_name, log_device)
+      result =
+        collect_output(port, timer_ref, team_name, log_device, on_token_update, on_activity)
+
       Process.cancel_timer(timer_ref)
       result
     after
@@ -81,7 +85,93 @@ defmodule Cortex.Orchestration.Spawner do
     end
   end
 
+  @doc """
+  Resumes a previous `claude -p` session using `--resume <session_id>`.
+
+  Takes the same options as `spawn/1` plus:
+    - `:session_id` — required. The session ID to resume.
+    - `:prompt` — the continuation prompt (default: "continue where you left off").
+
+  Returns `{:ok, %TeamResult{}}` on success, `{:error, term()}` on failure.
+  """
+  @spec resume(keyword()) :: {:ok, TeamResult.t()} | {:error, term()}
+  def resume(opts) when is_list(opts) do
+    team_name = Keyword.fetch!(opts, :team_name)
+    session_id = Keyword.fetch!(opts, :session_id)
+    prompt = Keyword.get(opts, :prompt, "continue where you left off")
+    timeout_minutes = Keyword.get(opts, :timeout_minutes, @default_timeout_minutes)
+    log_path = Keyword.get(opts, :log_path)
+    command = Keyword.get(opts, :command, @default_command)
+    cwd = Keyword.get(opts, :cwd)
+    on_token_update = Keyword.get(opts, :on_token_update)
+    on_activity = Keyword.get(opts, :on_activity)
+
+    args = build_resume_args(session_id, prompt)
+    command_path = resolve_command(command)
+    timeout_ms = round(timeout_minutes * 60 * 1_000)
+
+    log_device = open_log_device(log_path)
+
+    try do
+      port = open_port(command_path, args, cwd)
+      timer_ref = Process.send_after(self(), {:spawner_timeout, port}, timeout_ms)
+
+      result =
+        collect_output(port, timer_ref, team_name, log_device, on_token_update, on_activity)
+
+      Process.cancel_timer(timer_ref)
+      result
+    after
+      close_log_device(log_device)
+    end
+  end
+
+  @doc """
+  Extracts a session_id from an NDJSON log file.
+
+  Reads the first line of the log looking for `{"type":"system","subtype":"init","session_id":"..."}`.
+  Falls back to scanning the result line for session_id.
+
+  Returns `{:ok, session_id}` or `:error`.
+  """
+  @spec extract_session_id_from_log(String.t()) :: {:ok, String.t()} | :error
+  def extract_session_id_from_log(log_path) do
+    case File.read(log_path) do
+      {:ok, content} ->
+        content
+        |> String.split("\n")
+        |> Enum.find_value(:error, fn line ->
+          case Jason.decode(String.trim(line)) do
+            {:ok, %{"type" => "system", "subtype" => "init", "session_id" => sid}} ->
+              {:ok, sid}
+
+            {:ok, %{"type" => "result", "session_id" => sid}} when is_binary(sid) ->
+              {:ok, sid}
+
+            _ ->
+              nil
+          end
+        end)
+
+      {:error, _} ->
+        :error
+    end
+  end
+
   # -- Private ---------------------------------------------------------------
+
+  @spec build_resume_args(String.t(), String.t()) :: [String.t()]
+  defp build_resume_args(session_id, prompt) do
+    [
+      "--resume",
+      session_id,
+      "-p",
+      prompt,
+      "--output-format",
+      "stream-json",
+      "--verbose"
+    ]
+  end
 
   @spec build_args(String.t(), String.t(), pos_integer(), String.t()) :: [String.t()]
   defp build_args(prompt, model, max_turns, permission_mode) do
@@ -153,41 +243,55 @@ defmodule Cortex.Orchestration.Spawner do
   defp close_log_device(nil), do: :ok
   defp close_log_device(device), do: File.close(device)
 
-  @spec collect_output(port(), reference(), String.t(), File.io_device() | nil) ::
+  @spec collect_output(
+          port(),
+          reference(),
+          String.t(),
+          File.io_device() | nil,
+          function() | nil,
+          function() | nil
+        ) ::
           {:ok, TeamResult.t()} | {:error, term()}
-  defp collect_output(port, timer_ref, team_name, log_device) do
-    collect_loop(
-      port,
-      timer_ref,
-      team_name,
-      log_device,
-      _buffer = "",
-      _session_id = nil,
-      _result_line = nil
-    )
+  defp collect_output(port, timer_ref, team_name, log_device, on_token_update, on_activity) do
+    state = %{
+      team_name: team_name,
+      buffer: "",
+      session_id: nil,
+      result_line: nil,
+      tokens: %{input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0},
+      on_token_update: on_token_update,
+      on_activity: on_activity
+    }
+
+    collect_loop(port, timer_ref, log_device, state)
   end
 
-  defp collect_loop(port, timer_ref, team_name, log_device, buffer, session_id, result_line) do
+  defp collect_loop(port, timer_ref, log_device, state) do
     receive do
       {^port, {:data, data}} ->
         write_to_log(log_device, data)
-        {lines, new_buffer} = extract_lines(buffer <> data)
-        {new_session_id, new_result_line} = parse_lines(lines, session_id, result_line)
+        {lines, new_buffer} = extract_lines(state.buffer <> data)
 
-        collect_loop(
-          port,
-          timer_ref,
-          team_name,
-          log_device,
-          new_buffer,
-          new_session_id,
-          new_result_line
-        )
+        {new_session_id, new_result_line, usage_deltas, activities} =
+          parse_lines(lines, state.session_id, state.result_line)
+
+        new_tokens = accumulate_tokens(state.tokens, usage_deltas)
+        maybe_notify_tokens(state.on_token_update, state.team_name, state.tokens, new_tokens)
+        maybe_notify_activities(state.on_activity, state.team_name, activities)
+
+        collect_loop(port, timer_ref, log_device, %{
+          state
+          | buffer: new_buffer,
+            session_id: new_session_id,
+            result_line: new_result_line,
+            tokens: new_tokens
+        })
 
       {^port, {:exit_status, 0}} ->
-        # Process any remaining data in the buffer
-        {final_session_id, final_result_line} = parse_remaining(buffer, session_id, result_line)
-        build_team_result(team_name, final_session_id, final_result_line)
+        {final_session_id, final_result_line, _, _} =
+          parse_remaining(state.buffer, state.session_id, state.result_line)
+
+        build_team_result(state.team_name, final_session_id, final_result_line)
 
       {^port, {:exit_status, code}} ->
         {:error, {:exit_code, code}}
@@ -195,7 +299,7 @@ defmodule Cortex.Orchestration.Spawner do
       {:spawner_timeout, ^port} ->
         kill_port(port)
         Process.cancel_timer(timer_ref)
-        {:ok, %TeamResult{team: team_name, status: :timeout, session_id: session_id}}
+        {:ok, %TeamResult{team: state.team_name, status: :timeout, session_id: state.session_id}}
     end
   end
 
@@ -214,40 +318,113 @@ defmodule Cortex.Orchestration.Spawner do
   end
 
   @spec parse_lines([String.t()], String.t() | nil, map() | nil) ::
-          {String.t() | nil, map() | nil}
+          {String.t() | nil, map() | nil, [map()], [map()]}
   defp parse_lines(lines, session_id, result_line) do
-    Enum.reduce(lines, {session_id, result_line}, fn line, {sid, res} ->
-      parse_ndjson_line(String.trim(line), sid, res)
+    Enum.reduce(lines, {session_id, result_line, [], []}, fn line, {sid, res, usages, acts} ->
+      {new_sid, new_res, usage, activity} = parse_ndjson_line(String.trim(line), sid, res)
+      usages = if usage, do: [usage | usages], else: usages
+      acts = if activity, do: [activity | acts], else: acts
+      {new_sid, new_res, usages, acts}
     end)
   end
 
   @spec parse_remaining(String.t(), String.t() | nil, map() | nil) ::
-          {String.t() | nil, map() | nil}
-  defp parse_remaining("", session_id, result_line), do: {session_id, result_line}
+          {String.t() | nil, map() | nil, [map()], [map()]}
+  defp parse_remaining("", session_id, result_line), do: {session_id, result_line, [], []}
 
   defp parse_remaining(buffer, session_id, result_line) do
-    parse_ndjson_line(String.trim(buffer), session_id, result_line)
+    {sid, res, usage, activity} = parse_ndjson_line(String.trim(buffer), session_id, result_line)
+    usages = if usage, do: [usage], else: []
+    acts = if activity, do: [activity], else: []
+    {sid, res, usages, acts}
   end
 
   @spec parse_ndjson_line(String.t(), String.t() | nil, map() | nil) ::
-          {String.t() | nil, map() | nil}
-  defp parse_ndjson_line("", session_id, result_line), do: {session_id, result_line}
+          {String.t() | nil, map() | nil, map() | nil, map() | nil}
+  defp parse_ndjson_line("", session_id, result_line), do: {session_id, result_line, nil, nil}
 
   defp parse_ndjson_line(line, session_id, result_line) do
     case Jason.decode(line) do
       {:ok, %{"type" => "result"} = parsed} ->
-        {session_id, parsed}
+        {session_id, parsed, nil, nil}
 
       {:ok, %{"type" => "system", "subtype" => "init", "session_id" => sid}} ->
-        {sid, result_line}
+        {sid, result_line, nil, nil}
 
-      {:ok, _other} ->
-        {session_id, result_line}
+      {:ok, parsed} ->
+        usage = extract_usage(parsed)
+        activity = extract_activity(parsed)
+        {session_id, result_line, usage, activity}
 
       {:error, _} ->
         # Non-JSON line (e.g. stderr interleaved) — skip
-        {session_id, result_line}
+        {session_id, result_line, nil, nil}
     end
+  end
+
+  @spec extract_usage(map()) :: map() | nil
+  defp extract_usage(%{"message" => %{"usage" => usage}}) when is_map(usage), do: usage
+  defp extract_usage(%{"usage" => usage}) when is_map(usage), do: usage
+  defp extract_usage(_), do: nil
+
+  @spec accumulate_tokens(map(), [map()]) :: map()
+  defp accumulate_tokens(tokens, []), do: tokens
+
+  defp accumulate_tokens(tokens, usage_deltas) do
+    Enum.reduce(usage_deltas, tokens, fn usage, acc ->
+      %{
+        input_tokens: acc.input_tokens + Map.get(usage, "input_tokens", 0),
+        output_tokens: acc.output_tokens + Map.get(usage, "output_tokens", 0),
+        cache_read_tokens: acc.cache_read_tokens + Map.get(usage, "cache_read_input_tokens", 0),
+        cache_creation_tokens:
+          acc.cache_creation_tokens + Map.get(usage, "cache_creation_input_tokens", 0)
+      }
+    end)
+  end
+
+  @spec extract_activity(map()) :: map() | nil
+  defp extract_activity(%{"type" => "assistant", "message" => %{"content" => content}})
+       when is_list(content) do
+    tools =
+      content
+      |> Enum.filter(fn block -> is_map(block) and Map.get(block, "type") == "tool_use" end)
+      |> Enum.map(fn block -> Map.get(block, "name", "unknown") end)
+
+    if tools != [] do
+      %{type: :tool_use, tools: tools}
+    else
+      nil
+    end
+  end
+
+  defp extract_activity(%{
+         "type" => "content_block_start",
+         "content_block" => %{"type" => "tool_use", "name" => name}
+       }) do
+    %{type: :tool_use, tools: [name]}
+  end
+
+  defp extract_activity(_), do: nil
+
+  @spec maybe_notify_activities(function() | nil, String.t(), [map()]) :: :ok
+  defp maybe_notify_activities(nil, _team_name, _activities), do: :ok
+  defp maybe_notify_activities(_callback, _team_name, []), do: :ok
+
+  defp maybe_notify_activities(callback, team_name, activities) do
+    Enum.each(activities, fn activity ->
+      callback.(team_name, activity)
+    end)
+
+    :ok
+  end
+
+  @spec maybe_notify_tokens(function() | nil, String.t(), map(), map()) :: :ok
+  defp maybe_notify_tokens(nil, _team_name, _old, _new), do: :ok
+  defp maybe_notify_tokens(_callback, _team_name, same, same), do: :ok
+
+  defp maybe_notify_tokens(callback, team_name, _old_tokens, new_tokens) do
+    callback.(team_name, new_tokens)
+    :ok
   end
 
   @spec build_team_result(String.t(), String.t() | nil, map() | nil) ::
@@ -257,7 +434,8 @@ defmodule Cortex.Orchestration.Spawner do
   end
 
   defp build_team_result(team_name, session_id, result_map) do
-    status = parse_status(Map.get(result_map, "subtype", "success"))
+    result_text = Map.get(result_map, "result", "")
+    status = detect_status(result_map, result_text)
     cost = Map.get(result_map, "total_cost_usd") || Map.get(result_map, "cost_usd")
 
     usage = Map.get(result_map, "usage", %{})
@@ -282,11 +460,24 @@ defmodule Cortex.Orchestration.Spawner do
      }}
   end
 
-  @spec parse_status(String.t()) :: TeamResult.status()
-  defp parse_status("success"), do: :success
-  defp parse_status("error_max_turns"), do: :success
-  defp parse_status("error"), do: :error
-  defp parse_status(_other), do: :error
+  @spec detect_status(map(), String.t() | nil) :: TeamResult.status()
+  defp detect_status(result_map, result_text) do
+    subtype = Map.get(result_map, "subtype", "success")
+
+    cond do
+      is_binary(result_text) and String.contains?(result_text, "rate_limit_error") ->
+        :rate_limited
+
+      subtype == "success" ->
+        :success
+
+      subtype == "error_max_turns" ->
+        :success
+
+      true ->
+        :error
+    end
+  end
 
   @spec write_to_log(File.io_device() | nil, binary()) :: :ok
   defp write_to_log(nil, _data), do: :ok

@@ -125,6 +125,158 @@ defmodule Cortex.Orchestration.Runner do
     InboxBridge.deliver(workspace_path, to_team, message)
   end
 
+  @doc """
+  Resumes dead teams in a previously started run.
+
+  Scans the workspace state for teams marked "running" that have no active
+  process. For each dead team, extracts the session_id from the log file
+  and calls `Spawner.resume/1` to continue the session.
+
+  ## Parameters
+
+    - `workspace_path` — the project root directory containing `.cortex/`
+    - `opts` — keyword options:
+      - `:command` — override the claude command (for testing)
+      - `:timeout_minutes` — per-team timeout (default 30)
+      - `:retry_delay_ms` — delay before resuming rate-limited teams (default 60_000)
+
+  ## Returns
+
+    - `{:ok, results}` — map of team_name => TeamResult for each resumed team
+    - `{:error, reason}` — if workspace cannot be read
+  """
+  @spec resume_run(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def resume_run(workspace_path, opts \\ []) do
+    command = Keyword.get(opts, :command, "claude")
+    timeout_minutes = Keyword.get(opts, :timeout_minutes, 30)
+    auto_retry = Keyword.get(opts, :auto_retry, false)
+    retry_delay_ms = Keyword.get(opts, :retry_delay_ms, 60_000)
+
+    # Workspace struct path includes .cortex/
+    cortex_path = Path.join(workspace_path, ".cortex")
+    workspace = %Workspace{path: cortex_path}
+
+    with {:ok, state} <- Workspace.read_state(workspace) do
+      dead_teams = find_dead_teams(state)
+
+      if dead_teams == [] do
+        Logger.info("No dead teams to resume")
+        {:ok, %{}}
+      else
+        Logger.info("Found #{length(dead_teams)} dead teams: #{Enum.join(dead_teams, ", ")}")
+
+        results =
+          dead_teams
+          |> Enum.map(fn team_name ->
+            session_id = find_session_id(workspace, team_name)
+
+            if session_id do
+              Logger.info("Resuming #{team_name} (session: #{session_id})")
+
+              log_path = Workspace.log_path(workspace, team_name)
+
+              result =
+                Spawner.resume(
+                  team_name: team_name,
+                  session_id: session_id,
+                  timeout_minutes: timeout_minutes,
+                  log_path: log_path,
+                  command: command,
+                  cwd: workspace_path
+                )
+
+              case result do
+                {:ok, %TeamResult{status: :rate_limited}} when auto_retry ->
+                  Logger.warning(
+                    "#{team_name} hit rate limit, auto-retrying in #{div(retry_delay_ms, 1000)}s"
+                  )
+
+                  Process.sleep(retry_delay_ms)
+
+                  retry_result =
+                    Spawner.resume(
+                      team_name: team_name,
+                      session_id: session_id,
+                      timeout_minutes: timeout_minutes,
+                      log_path: log_path,
+                      command: command,
+                      cwd: workspace_path
+                    )
+
+                  {team_name, retry_result}
+
+                {:ok, %TeamResult{status: :rate_limited}} ->
+                  Logger.warning(
+                    "#{team_name} hit rate limit — resume again later (or use auto_retry: true)"
+                  )
+
+                  {team_name, {:error, :rate_limited}}
+
+                other ->
+                  {team_name, other}
+              end
+            else
+              Logger.warning("No session_id found for #{team_name}, cannot resume")
+              {team_name, {:error, :no_session_id}}
+            end
+          end)
+
+        # Update workspace state for resumed teams
+        Enum.each(results, fn
+          {team_name, {:ok, %TeamResult{status: :success} = tr}} ->
+            apply_outcome(workspace, {team_name, :ok, %{type: :success, result: tr}})
+
+          {team_name, {:ok, %TeamResult{} = tr}} ->
+            apply_outcome(
+              workspace,
+              {team_name, {:error, tr.status}, %{type: :failure, result: tr}}
+            )
+
+          _ ->
+            :ok
+        end)
+
+        {:ok, Map.new(results)}
+      end
+    end
+  end
+
+  @spec find_dead_teams(State.t()) :: [String.t()]
+  defp find_dead_teams(state) do
+    state.teams
+    |> Enum.filter(fn {_name, ts} -> ts.status == "running" end)
+    |> Enum.map(fn {name, _ts} -> name end)
+    |> Enum.sort()
+  end
+
+  @spec find_session_id(Workspace.t(), String.t()) :: String.t() | nil
+  defp find_session_id(workspace, team_name) do
+    # Try registry first
+    case Workspace.read_registry(workspace) do
+      {:ok, registry} ->
+        entry = Enum.find(registry.teams, fn e -> e.name == team_name end)
+
+        if entry && entry.session_id do
+          entry.session_id
+        else
+          # Fall back to log file parsing
+          log_path = Workspace.log_path(workspace, team_name)
+          extract_session_id_from_log(log_path)
+        end
+
+      _ ->
+        log_path = Workspace.log_path(workspace, team_name)
+        extract_session_id_from_log(log_path)
+    end
+  end
+
+  defp extract_session_id_from_log(log_path) do
+    case Spawner.extract_session_id_from_log(log_path) do
+      {:ok, sid} -> sid
+      :error -> nil
+    end
+  end
+
   # -- Dry Run -----------------------------------------------------------------
 
   @spec build_dry_run_plan(Config.t(), [[String.t()]]) :: {:ok, map()}
@@ -171,7 +323,8 @@ defmodule Cortex.Orchestration.Runner do
             run ->
               Cortex.Store.update_run(run, %{
                 status: "running",
-                started_at: DateTime.utc_now()
+                started_at: DateTime.utc_now(),
+                workspace_path: workspace_path
               })
 
               run_id
@@ -192,6 +345,14 @@ defmodule Cortex.Orchestration.Runner do
       end
 
     with {:ok, workspace} <- Workspace.init(workspace_path, ws_config) do
+      # Start outbox watcher for progress messages
+      _watcher_pid =
+        safe_start_watcher(
+          workspace_path: workspace_path,
+          run_id: run_id,
+          team_names: team_names
+        )
+
       broadcast(:run_started, %{project: config.name, teams: team_names})
       Tel.emit_run_started(%{project: config.name, teams: team_names})
 
@@ -335,7 +496,7 @@ defmodule Cortex.Orchestration.Runner do
         team_names
         |> Enum.map(fn name ->
           Task.async(fn ->
-            run_team(name, config, workspace, state, command)
+            run_team(name, config, workspace, state, command, run_id)
           end)
         end)
         |> Task.await_many(@default_task_timeout_ms)
@@ -370,9 +531,9 @@ defmodule Cortex.Orchestration.Runner do
   # Each team task returns {name, :ok | {:error, reason}, outcome_data}
   # outcome_data is a map with the info needed to update workspace
 
-  @spec run_team(String.t(), Config.t(), Workspace.t(), State.t(), String.t()) ::
+  @spec run_team(String.t(), Config.t(), Workspace.t(), State.t(), String.t(), String.t() | nil) ::
           {String.t(), :ok | {:error, term()}, map()}
-  defp run_team(team_name, config, workspace, state, command) do
+  defp run_team(team_name, config, workspace, state, command, run_id) do
     team = find_team(config.teams, team_name)
     model = Injection.build_model(team, config.defaults)
     max_turns = Injection.build_max_turns(config.defaults)
@@ -380,6 +541,27 @@ defmodule Cortex.Orchestration.Runner do
     timeout_minutes = config.defaults.timeout_minutes
     prompt = Injection.build_prompt(team, config.name, state, config.defaults)
     log_path = Workspace.log_path(workspace, team_name)
+
+    on_token_update = fn name, tokens ->
+      broadcast(:team_tokens_updated, %{
+        run_id: run_id,
+        team_name: name,
+        input_tokens: tokens.input_tokens,
+        output_tokens: tokens.output_tokens,
+        cache_read_tokens: tokens.cache_read_tokens,
+        cache_creation_tokens: tokens.cache_creation_tokens
+      })
+    end
+
+    on_activity = fn name, activity ->
+      broadcast(:team_activity, %{
+        run_id: run_id,
+        team_name: name,
+        type: activity.type,
+        tools: Map.get(activity, :tools, []),
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+      })
+    end
 
     spawner_opts = [
       team_name: team_name,
@@ -390,7 +572,9 @@ defmodule Cortex.Orchestration.Runner do
       timeout_minutes: timeout_minutes,
       log_path: log_path,
       command: command,
-      cwd: workspace.path
+      cwd: workspace.path,
+      on_token_update: on_token_update,
+      on_activity: on_activity
     ]
 
     case Spawner.spawn(spawner_opts) do
@@ -580,6 +764,16 @@ defmodule Cortex.Orchestration.Runner do
     rescue
       _ -> :ok
     end
+  end
+
+  @spec safe_start_watcher(keyword()) :: pid() | nil
+  defp safe_start_watcher(opts) do
+    case Cortex.Messaging.OutboxWatcher.start_link(opts) do
+      {:ok, pid} -> pid
+      _ -> nil
+    end
+  rescue
+    _ -> nil
   end
 
   @spec write_team_result(Workspace.t(), String.t(), TeamResult.t()) :: :ok | {:error, term()}

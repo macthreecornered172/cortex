@@ -34,6 +34,7 @@ defmodule Cortex.Telemetry do
   @run_completed [:cortex, :run, :completed]
   @tier_completed [:cortex, :tier, :completed]
   @team_completed [:cortex, :team, :completed]
+  @team_tokens_updated [:cortex, :team, :tokens_updated]
   @gossip_exchange [:cortex, :gossip, :exchange]
   @tool_executed [:cortex, :tool, :executed]
 
@@ -47,6 +48,7 @@ defmodule Cortex.Telemetry do
       @run_completed,
       @tier_completed,
       @team_completed,
+      @team_tokens_updated,
       @gossip_exchange,
       @tool_executed
     ]
@@ -96,6 +98,17 @@ defmodule Cortex.Telemetry do
     }
 
     :telemetry.execute(@team_completed, measurements, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :team, :tokens_updated]` event."
+  @spec emit_team_tokens_updated(map()) :: :ok
+  def emit_team_tokens_updated(metadata) when is_map(metadata) do
+    measurements = %{
+      input_tokens: Map.get(metadata, :input_tokens, 0),
+      output_tokens: Map.get(metadata, :output_tokens, 0)
+    }
+
+    :telemetry.execute(@team_tokens_updated, measurements, metadata)
   end
 
   @doc "Emits a `[:cortex, :gossip, :exchange]` event."

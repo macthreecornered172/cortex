@@ -6,7 +6,7 @@ defmodule Cortex.Orchestration.OrchestrationQETest do
   that complement Phase 3's 350-test coverage.
   """
 
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias Cortex.Orchestration.Config.Loader
   alias Cortex.Orchestration.DAG
