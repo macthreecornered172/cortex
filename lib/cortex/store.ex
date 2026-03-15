@@ -78,6 +78,45 @@ defmodule Cortex.Store do
     Repo.all(query)
   end
 
+  @doc """
+  Recomputes and persists a run's aggregate token/cost totals from its team_runs.
+
+  Use this to fix stale `total_input_tokens` values or to backfill
+  cache token breakdowns added in later migrations.
+  """
+  @spec recompute_run_totals(Run.t()) :: {:ok, Run.t()} | {:error, term()}
+  def recompute_run_totals(%Run{} = run) do
+    team_runs = get_team_runs(run.id)
+
+    total_input =
+      team_runs
+      |> Enum.map(fn tr ->
+        (tr.input_tokens || 0) + (tr.cache_read_tokens || 0) + (tr.cache_creation_tokens || 0)
+      end)
+      |> Enum.sum()
+
+    total_output = team_runs |> Enum.map(&(&1.output_tokens || 0)) |> Enum.sum()
+    total_cache_read = team_runs |> Enum.map(&(&1.cache_read_tokens || 0)) |> Enum.sum()
+    total_cache_creation = team_runs |> Enum.map(&(&1.cache_creation_tokens || 0)) |> Enum.sum()
+    total_cost = team_runs |> Enum.map(&(&1.cost_usd || 0.0)) |> Enum.sum()
+
+    update_run(run, %{
+      total_input_tokens: total_input,
+      total_output_tokens: total_output,
+      total_cache_read_tokens: total_cache_read,
+      total_cache_creation_tokens: total_cache_creation,
+      total_cost_usd: total_cost
+    })
+  end
+
+  @doc "Recomputes totals for all completed and failed runs."
+  @spec backfill_all_run_totals() :: :ok
+  def backfill_all_run_totals do
+    from(r in Run, where: r.status in ["completed", "failed"])
+    |> Repo.all()
+    |> Enum.each(&recompute_run_totals/1)
+  end
+
   # ── Team Runs ─────────────────────────────────────────────────────
 
   @doc "Creates a new team run."

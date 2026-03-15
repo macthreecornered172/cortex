@@ -5,6 +5,7 @@ defmodule CortexWeb.TeamDetailLive do
   alias Cortex.Orchestration.Spawner
 
   @max_log_lines 500
+  @max_activities 150
 
   @impl true
   def mount(%{"id" => run_id, "name" => team_name}, _session, socket) do
@@ -31,6 +32,7 @@ defmodule CortexWeb.TeamDetailLive do
        log_sort: :desc,
        expanded_logs: MapSet.new(),
        active_tab: "result",
+       activities: [],
        page_title: "Team: #{team_name}",
        diagnostics: diagnostics
      )}
@@ -117,8 +119,18 @@ defmodule CortexWeb.TeamDetailLive do
     workspace_path = run && run.workspace_path
 
     if workspace_path && team_run && team_run.prompt do
-      {socket, enriched_prompt, log_path} = prepare_restart(socket, team_run, team_name, workspace_path)
-      spawn_restart_task(run.id, team_run.id, team_name, enriched_prompt, log_path, workspace_path)
+      {socket, enriched_prompt, log_path} =
+        prepare_restart(socket, team_run, team_name, workspace_path)
+
+      spawn_restart_task(
+        run.id,
+        team_run.id,
+        team_name,
+        enriched_prompt,
+        log_path,
+        workspace_path
+      )
+
       {:noreply, put_flash(socket, :info, "Restarting #{team_name} with fresh session...")}
     else
       {:noreply, put_flash(socket, :error, "No prompt or workspace path — cannot restart")}
@@ -142,6 +154,57 @@ defmodule CortexWeb.TeamDetailLive do
     if payload.team_name == socket.assigns.team_name do
       {:noreply,
        put_flash(socket, :info, "Resume #{payload.status}: #{Map.get(payload, :reason, "")}")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(%{type: :team_activity, payload: payload}, socket) do
+    if Map.get(payload, :team_name) == socket.assigns.team_name &&
+         Map.get(payload, :run_id) == socket.assigns.run_id do
+      tools = Map.get(payload, :tools, [])
+      details = Map.get(payload, :details, [])
+      text = format_tool_activity(tools, details)
+
+      entry = %{text: text, kind: :tool, at: format_now()}
+      {:noreply, assign(socket, activities: prepend_activity(socket.assigns.activities, entry))}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(%{type: :team_progress, payload: payload}, socket) do
+    if Map.get(payload, :team_name) == socket.assigns.team_name &&
+         Map.get(payload, :run_id) == socket.assigns.run_id do
+      message = Map.get(payload, :message, %{})
+      content = Map.get(message, "content", Map.get(message, :content, ""))
+
+      entry = %{text: truncate(to_string(content), 200), kind: :progress, at: format_now()}
+      {:noreply, assign(socket, activities: prepend_activity(socket.assigns.activities, entry))}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(%{type: :team_tokens_updated, payload: payload}, socket) do
+    if Map.get(payload, :team_name) == socket.assigns.team_name &&
+         Map.get(payload, :run_id) == socket.assigns.run_id do
+      team_run = socket.assigns.team_run
+
+      if team_run do
+        updated = %{
+          team_run
+          | input_tokens: payload.input_tokens,
+            output_tokens: payload.output_tokens,
+            cache_read_tokens: Map.get(payload, :cache_read_tokens, team_run.cache_read_tokens),
+            cache_creation_tokens:
+              Map.get(payload, :cache_creation_tokens, team_run.cache_creation_tokens)
+        }
+
+        {:noreply, assign(socket, team_run: updated)}
+      else
+        {:noreply, socket}
+      end
     else
       {:noreply, socket}
     end
@@ -246,7 +309,7 @@ defmodule CortexWeb.TeamDetailLive do
     <!-- Tabs -->
     <div class="flex border-b border-gray-800 mb-6">
       <button
-        :for={tab <- ~w(result log config prompt)}
+        :for={tab <- ~w(result activity log config prompt)}
         phx-click="switch_tab"
         phx-value-tab={tab}
         class={[
@@ -272,6 +335,22 @@ defmodule CortexWeb.TeamDetailLive do
             </div>
           <% else %>
             <p class="text-gray-500">No result summary available.</p>
+          <% end %>
+
+        <% "activity" -> %>
+          <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
+            Activity ({length(@activities)} events)
+          </h3>
+          <%= if @activities == [] do %>
+            <p class="text-gray-500 text-sm">No activity yet. Events appear here in real-time while the team is running.</p>
+          <% else %>
+            <div class="space-y-1 max-h-[70vh] overflow-y-auto">
+              <div :for={entry <- @activities} class="flex items-start gap-2 text-sm py-1">
+                <span class="text-gray-600 text-xs shrink-0 mt-0.5">{entry.at}</span>
+                <span class={activity_icon_class(entry.kind)}>{activity_icon(entry.kind)}</span>
+                <span class="text-gray-300">{entry.text}</span>
+              </div>
+            </div>
           <% end %>
 
         <% "log" -> %>
@@ -393,7 +472,11 @@ defmodule CortexWeb.TeamDetailLive do
   end
 
   defp team_input_tokens(nil), do: nil
-  defp team_input_tokens(team_run), do: team_run.input_tokens
+
+  defp team_input_tokens(team_run) do
+    (team_run.input_tokens || 0) + (team_run.cache_read_tokens || 0) +
+      (team_run.cache_creation_tokens || 0)
+  end
 
   defp team_output_tokens(nil), do: nil
   defp team_output_tokens(team_run), do: team_run.output_tokens
@@ -403,6 +486,11 @@ defmodule CortexWeb.TeamDetailLive do
 
   defp tab_label("log", assigns) do
     if assigns.log_lines, do: "Log (#{length(assigns.log_lines)})", else: "Log"
+  end
+
+  defp tab_label("activity", assigns) do
+    count = length(assigns.activities)
+    if count > 0, do: "Activity (#{count})", else: "Activity"
   end
 
   defp tab_label(tab, _assigns), do: String.capitalize(tab)
@@ -686,6 +774,37 @@ defmodule CortexWeb.TeamDetailLive do
   end
 
   defp truncate_summary(other), do: inspect(other) |> truncate_summary()
+
+  defp prepend_activity(activities, entry) do
+    [entry | activities] |> Enum.take(@max_activities)
+  end
+
+  defp format_now do
+    DateTime.utc_now() |> Calendar.strftime("%H:%M:%S")
+  end
+
+  defp truncate(text, max) do
+    if String.length(text) > max, do: String.slice(text, 0, max) <> "...", else: text
+  end
+
+  defp format_tool_activity([], _details), do: ""
+
+  defp format_tool_activity(tools, details) do
+    tools
+    |> Enum.zip(details ++ List.duplicate(nil, max(0, length(tools) - length(details))))
+    |> Enum.map_join(", ", fn
+      {tool, nil} -> tool
+      {tool, detail} -> "#{tool}: #{detail}"
+    end)
+  end
+
+  defp activity_icon(:tool), do: ">"
+  defp activity_icon(:progress), do: "*"
+  defp activity_icon(_), do: "-"
+
+  defp activity_icon_class(:tool), do: "text-blue-400 font-mono"
+  defp activity_icon_class(:progress), do: "text-green-400 font-mono"
+  defp activity_icon_class(_), do: "text-gray-400 font-mono"
 
   defp format_token_count(nil), do: "0"
   defp format_token_count(0), do: "0"
