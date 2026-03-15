@@ -3,7 +3,7 @@ workspace_path: /tmp/cortex-blitz
 
 defaults:
   model: sonnet
-  max_turns: 50
+  max_turns: 100
   permission_mode: bypassPermissions
   timeout_minutes: 45
 
