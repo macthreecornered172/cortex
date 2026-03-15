@@ -3,7 +3,7 @@ defmodule Cortex.Repo.Migrations.AddModeToRuns do
 
   def change do
     alter table(:runs) do
-      add :mode, :string, default: "orchestration"
+      add :mode, :string, default: "workflow"
     end
   end
 end

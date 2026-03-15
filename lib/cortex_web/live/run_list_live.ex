@@ -205,7 +205,7 @@ defmodule CortexWeb.RunListLive do
                 <div class="flex items-center gap-2">
                   <.status_badge status={run.status} />
                   <span class={["text-xs px-1.5 py-0.5 rounded", mode_class(run.mode)]}>
-                    {run.mode || "orchestration"}
+                    {run.mode || "workflow"}
                   </span>
                 </div>
               </td>

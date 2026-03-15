@@ -25,7 +25,7 @@ defmodule Cortex.Store.Schemas.Run do
     field(:started_at, :utc_datetime_usec)
     field(:completed_at, :utc_datetime_usec)
     field(:workspace_path, :string)
-    field(:mode, :string, default: "orchestration")
+    field(:mode, :string, default: "workflow")
 
     has_many(:team_runs, TeamRun)
 
