@@ -17,9 +17,12 @@ defmodule CortexWeb.RunDetailLive do
   @max_log_lines 500
   @pid_check_interval_ms 30_000
 
+  @elapsed_tick_ms 1_000
+
   @impl true
   def mount(%{"id" => id}, _session, socket) do
     if connected?(socket), do: safe_subscribe()
+    if connected?(socket), do: :timer.send_interval(@elapsed_tick_ms, self(), :tick_elapsed)
 
     case safe_get_run(id) do
       nil ->
@@ -53,7 +56,10 @@ defmodule CortexWeb.RunDetailLive do
            coordinator_summaries: [],
            selected_summary: nil,
            run_summary: nil,
-           pid_status: %{}
+           pid_status: %{},
+           editing_name: false,
+           name_form: %{"name" => ""},
+           expanded_activities: MapSet.new()
          )}
 
       run ->
@@ -98,7 +104,10 @@ defmodule CortexWeb.RunDetailLive do
            coordinator_summaries: [],
            selected_summary: nil,
            run_summary: nil,
-           pid_status: %{}
+           pid_status: %{},
+           editing_name: false,
+           name_form: %{"name" => run.name || ""},
+           expanded_activities: MapSet.new()
          )}
         |> tap(fn _ -> maybe_start_pid_check(run, socket) end)
     end
@@ -335,6 +344,11 @@ defmodule CortexWeb.RunDetailLive do
     else
       {:noreply, socket}
     end
+  end
+
+  def handle_info(:tick_elapsed, socket) do
+    # Just triggers a re-render so elapsed_since/1 shows updated time
+    {:noreply, socket}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -670,6 +684,36 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
+  def handle_event("start_rename", _params, socket) do
+    {:noreply, assign(socket, editing_name: true, name_form: %{"name" => socket.assigns.run.name || ""})}
+  end
+
+  def handle_event("cancel_rename", _params, socket) do
+    {:noreply, assign(socket, editing_name: false)}
+  end
+
+  def handle_event("save_rename", %{"name" => new_name}, socket) do
+    run = socket.assigns.run
+    new_name = String.trim(new_name)
+
+    if run && new_name != "" do
+      case Cortex.Store.update_run(run, %{name: new_name}) do
+        {:ok, updated_run} ->
+          {:noreply,
+           assign(socket,
+             run: updated_run,
+             editing_name: false,
+             page_title: "Run: #{updated_run.name}"
+           )}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "Failed to rename run")}
+      end
+    else
+      {:noreply, assign(socket, editing_name: false)}
+    end
+  end
+
   def handle_event("reconcile_run", _params, socket) do
     run = socket.assigns.run
 
@@ -778,6 +822,18 @@ defmodule CortexWeb.RunDetailLive do
     {:noreply, assign(socket, activity_team: team_name)}
   end
 
+  def handle_event("toggle_activity", %{"index" => idx_str}, socket) do
+    idx = String.to_integer(idx_str)
+    expanded = socket.assigns.expanded_activities
+
+    expanded =
+      if MapSet.member?(expanded, idx),
+        do: MapSet.delete(expanded, idx),
+        else: MapSet.put(expanded, idx)
+
+    {:noreply, assign(socket, expanded_activities: expanded)}
+  end
+
   # -- Event handlers: coordinator summaries --
 
   def handle_event("refresh_summaries", _params, socket) do
@@ -814,14 +870,43 @@ defmodule CortexWeb.RunDetailLive do
       </div>
     <% else %>
       <.header>
-        {run_title(@run)}
+        <%= if @editing_name do %>
+          <form phx-submit="save_rename" class="inline-flex items-center gap-2">
+            <input
+              type="text"
+              name="name"
+              value={@name_form["name"]}
+              autofocus
+              class="bg-gray-950 border border-gray-600 rounded px-2 py-1 text-white text-lg font-semibold focus:border-cortex-400 focus:ring-1 focus:ring-cortex-400"
+              phx-keydown="cancel_rename"
+              phx-key="Escape"
+            />
+            <button type="submit" class="text-sm text-green-400 hover:text-green-300">Save</button>
+            <button type="button" phx-click="cancel_rename" class="text-sm text-gray-400 hover:text-gray-300">Cancel</button>
+          </form>
+        <% else %>
+          <span phx-click="start_rename" class="cursor-pointer hover:text-cortex-300 transition-colors" title="Click to rename">
+            {run_title(@run)}
+          </span>
+        <% end %>
         <:subtitle>
           <.status_badge status={@run.status} />
           <span class="ml-2 text-gray-400">
-            <.token_display input={sum_total_input(@team_runs)} output={sum_team_field(@team_runs, :output_tokens)} />
+            <.token_detail
+              id="run-tokens"
+              input={sum_team_field(@team_runs, :input_tokens)}
+              output={sum_team_field(@team_runs, :output_tokens)}
+              cache_read={sum_team_field(@team_runs, :cache_read_tokens)}
+              cache_creation={sum_team_field(@team_runs, :cache_creation_tokens)}
+              cost={@run.total_cost_usd}
+            />
           </span>
           <span class="ml-2 text-gray-400">
-            <.duration_display ms={@run.total_duration_ms} />
+            <%= if @run.status in ["running", "pending"] and @run.started_at do %>
+              {elapsed_since(@run.started_at)}
+            <% else %>
+              <.duration_display ms={@run.total_duration_ms} />
+            <% end %>
           </span>
           <span :if={@run.workspace_path} class="ml-2 text-gray-500 text-xs font-mono">
             {@run.workspace_path}
@@ -907,7 +992,7 @@ defmodule CortexWeb.RunDetailLive do
       <!-- Tab Bar -->
       <div class="flex border-b border-gray-800 mb-6">
         <button
-          :for={tab <- ~w(overview activity messages logs diagnostics)}
+          :for={tab <- ~w(overview activity messages logs diagnostics settings)}
           phx-click="switch_tab"
           phx-value-tab={tab}
           class={[
@@ -1131,6 +1216,39 @@ defmodule CortexWeb.RunDetailLive do
             </a>
           </div>
         <% end %>
+
+        <!-- Activity Feed (all teams, no filter) -->
+        <div class="mt-6">
+          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+            <div class="flex items-center gap-3 mb-3">
+              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Activity Feed</h2>
+              <span class="text-xs text-gray-600 ml-auto">{length(@activities)} events</span>
+            </div>
+            <%= if @activities == [] do %>
+              <p class="text-gray-500 text-sm">No activity yet. Events appear here in real-time.</p>
+            <% else %>
+              <div class="space-y-0.5 max-h-[50vh] overflow-y-auto" id="overview-activity-feed">
+                <%= for {entry, idx} <- Enum.with_index(@activities) do %>
+                  <% expanded = MapSet.member?(@expanded_activities, idx) %>
+                  <div
+                    phx-click="toggle_activity"
+                    phx-value-index={idx}
+                    class={["flex items-start gap-2 text-sm py-1 px-1 rounded cursor-pointer transition-colors", if(expanded, do: "bg-gray-800/40", else: "hover:bg-gray-800/20")]}
+                  >
+                    <span class="text-gray-600 text-xs shrink-0 mt-0.5">{entry.at}</span>
+                    <span class={activity_icon_class(entry.kind)}>{activity_icon(entry.kind)}</span>
+                    <span class="text-cortex-400 font-medium shrink-0">{entry.team}:</span>
+                    <%= if expanded do %>
+                      <span class="text-gray-300 break-all min-w-0">{entry.text}</span>
+                    <% else %>
+                      <span class="text-gray-300 truncate min-w-0">{entry.text}</span>
+                    <% end %>
+                  </div>
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+        </div>
       </div>
 
       <!-- ============ Activity Tab ============ -->
@@ -1156,13 +1274,24 @@ defmodule CortexWeb.RunDetailLive do
           <%= if visible == [] do %>
             <p class="text-gray-500 text-sm">No activity yet. Events appear here in real-time and clear on page reload.</p>
           <% else %>
-            <div class="space-y-1 min-h-[60vh] max-h-[80vh] overflow-y-auto" id="activity-feed">
-              <div :for={entry <- visible} class="flex items-start gap-2 text-sm py-1">
-                <span class="text-gray-600 text-xs shrink-0 mt-0.5">{entry.at}</span>
-                <span class={activity_icon_class(entry.kind)}>{activity_icon(entry.kind)}</span>
-                <span class="text-cortex-400 font-medium shrink-0">{entry.team}:</span>
-                <span class="text-gray-300">{entry.text}</span>
-              </div>
+            <div class="space-y-0.5 min-h-[60vh] max-h-[80vh] overflow-y-auto" id="activity-feed">
+              <%= for {entry, idx} <- Enum.with_index(visible) do %>
+                <% expanded = MapSet.member?(@expanded_activities, idx) %>
+                <div
+                  phx-click="toggle_activity"
+                  phx-value-index={idx}
+                  class={["flex items-start gap-2 text-sm py-1 px-1 rounded cursor-pointer transition-colors", if(expanded, do: "bg-gray-800/40", else: "hover:bg-gray-800/20")]}
+                >
+                  <span class="text-gray-600 text-xs shrink-0 mt-0.5">{entry.at}</span>
+                  <span class={activity_icon_class(entry.kind)}>{activity_icon(entry.kind)}</span>
+                  <span class="text-cortex-400 font-medium shrink-0">{entry.team}:</span>
+                  <%= if expanded do %>
+                    <span class="text-gray-300 break-all min-w-0">{entry.text}</span>
+                  <% else %>
+                    <span class="text-gray-300 truncate min-w-0">{entry.text}</span>
+                  <% end %>
+                </div>
+              <% end %>
             </div>
           <% end %>
         </div>
@@ -1454,9 +1583,11 @@ defmodule CortexWeb.RunDetailLive do
               </div>
             </div>
 
-            <!-- Resume / Restart buttons for this specific team -->
+            <!-- Resume / Restart buttons for this specific team (hide when team is actively running) -->
+            <% diag_team_run = Enum.find(@team_runs, &(&1.team_name == @diagnostics_team)) %>
+            <% diag_team_status = if(diag_team_run, do: diag_team_run.status || "pending", else: "pending") %>
             <div
-              :if={report.session_id && report.diagnosis not in [:completed]}
+              :if={report.session_id && report.diagnosis not in [:completed] && diag_team_status != "running"}
               class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4"
             >
               <div class="flex items-center justify-between">
@@ -1556,6 +1687,142 @@ defmodule CortexWeb.RunDetailLive do
             <p class="text-gray-500">No workspace path available. Diagnostics require a workspace with .cortex/logs/ directory.</p>
           </div>
         <% end %>
+      </div>
+
+      <!-- ============ Settings Tab ============ -->
+      <div :if={@current_tab == "settings"}>
+        <% config = parse_run_config(@run) %>
+        <div class="space-y-4">
+          <!-- Run Identity -->
+          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+            <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Run</h2>
+            <dl class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+              <div>
+                <dt class="text-xs text-gray-500">Name</dt>
+                <dd class="text-sm text-gray-200 font-mono">{@run.name || "Untitled"}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500">ID</dt>
+                <dd class="text-sm text-gray-400 font-mono text-xs">{@run.id}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500">Status</dt>
+                <dd><.status_badge status={@run.status} /></dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500">Mode</dt>
+                <dd class="text-sm text-gray-200">{@run.mode || "workflow"}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500">Workspace Path</dt>
+                <dd class="text-sm text-gray-200 font-mono">{@run.workspace_path || "--"}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500">Created</dt>
+                <dd class="text-sm text-gray-200">{format_datetime(@run.inserted_at)}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500">Started</dt>
+                <dd class="text-sm text-gray-200">{format_datetime(@run.started_at)}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500">Completed</dt>
+                <dd class="text-sm text-gray-200">{format_datetime(@run.completed_at)}</dd>
+              </div>
+            </dl>
+          </div>
+
+          <!-- Execution -->
+          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+            <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Execution</h2>
+            <dl class="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3">
+              <div>
+                <dt class="text-xs text-gray-500">Teams</dt>
+                <dd class="text-sm text-gray-200">{length(@team_runs)}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500">Tiers</dt>
+                <dd class="text-sm text-gray-200">{length(@tiers)}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500">Tokens</dt>
+                <dd class="text-sm text-gray-200"><.token_display input={sum_team_field(@team_runs, :input_tokens)} output={sum_team_field(@team_runs, :output_tokens)} /></dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500">Total Cost</dt>
+                <dd class="text-sm text-gray-200"><.cost_display amount={@run.total_cost_usd} /></dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500">Duration</dt>
+                <dd class="text-sm text-gray-200"><.duration_display ms={@run.total_duration_ms} /></dd>
+              </div>
+            </dl>
+          </div>
+
+          <!-- Config Defaults (parsed from YAML) -->
+          <%= if config do %>
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Defaults</h2>
+              <dl class="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3">
+                <div>
+                  <dt class="text-xs text-gray-500">Model</dt>
+                  <dd class="text-sm text-gray-200">{config.defaults.model}</dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-gray-500">Max Turns</dt>
+                  <dd class="text-sm text-gray-200">{config.defaults.max_turns}</dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-gray-500">Permission Mode</dt>
+                  <dd class="text-sm text-gray-200">{config.defaults.permission_mode}</dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-gray-500">Timeout</dt>
+                  <dd class="text-sm text-gray-200">{config.defaults.timeout_minutes}m</dd>
+                </div>
+              </dl>
+            </div>
+
+            <!-- Team Summary Table -->
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Teams</h2>
+              <div class="overflow-x-auto">
+                <table class="w-full">
+                  <thead>
+                    <tr class="border-b border-gray-800">
+                      <th class="text-left text-xs font-medium text-gray-500 uppercase px-3 py-2">Name</th>
+                      <th class="text-left text-xs font-medium text-gray-500 uppercase px-3 py-2">Lead</th>
+                      <th class="text-left text-xs font-medium text-gray-500 uppercase px-3 py-2">Model</th>
+                      <th class="text-left text-xs font-medium text-gray-500 uppercase px-3 py-2">Members</th>
+                      <th class="text-left text-xs font-medium text-gray-500 uppercase px-3 py-2">Tasks</th>
+                      <th class="text-left text-xs font-medium text-gray-500 uppercase px-3 py-2">Depends On</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr :for={team <- config.teams} class="border-b border-gray-800/50">
+                      <td class="px-3 py-2 text-sm text-cortex-400 font-medium">{team.name}</td>
+                      <td class="px-3 py-2 text-sm text-gray-300">{team.lead.role}</td>
+                      <td class="px-3 py-2 text-sm text-gray-400">{team.lead.model || config.defaults.model}</td>
+                      <td class="px-3 py-2 text-sm text-gray-400">{length(team.members)}</td>
+                      <td class="px-3 py-2 text-sm text-gray-400">{length(team.tasks)}</td>
+                      <td class="px-3 py-2 text-sm text-gray-400 font-mono">
+                        {if team.depends_on == [], do: "--", else: Enum.join(team.depends_on, ", ")}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          <% end %>
+
+          <!-- Raw YAML -->
+          <%= if @run.config_yaml do %>
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">orchestra.yaml</h2>
+              <pre class="bg-gray-950 rounded p-4 text-xs text-gray-300 font-mono overflow-auto max-h-[60vh] whitespace-pre-wrap">{@run.config_yaml}</pre>
+            </div>
+          <% end %>
+        </div>
       </div>
     <% end %>
     """
@@ -2297,10 +2564,6 @@ defmodule CortexWeb.RunDetailLive do
     team_runs |> Enum.map(&(Map.get(&1, field) || 0)) |> Enum.sum()
   end
 
-  defp sum_total_input(team_runs) do
-    team_runs |> Enum.map(&total_input/1) |> Enum.sum()
-  end
-
   defp prepend_activity(activities, entry) do
     [entry | activities] |> Enum.take(@max_activities)
   end
@@ -2313,6 +2576,20 @@ defmodule CortexWeb.RunDetailLive do
 
   defp format_now do
     DateTime.utc_now() |> Calendar.strftime("%H:%M:%S")
+  end
+
+  defp format_datetime(nil), do: "--"
+  defp format_datetime(%DateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S")
+  defp format_datetime(%NaiveDateTime{} = ndt), do: Calendar.strftime(ndt, "%Y-%m-%d %H:%M:%S")
+  defp format_datetime(_), do: "--"
+
+  defp parse_run_config(run) do
+    with yaml when is_binary(yaml) <- run.config_yaml,
+         {:ok, config, _warnings} <- ConfigLoader.load_string(yaml) do
+      config
+    else
+      _ -> nil
+    end
   end
 
   defp truncate(text, max) do
@@ -2450,6 +2727,12 @@ defmodule CortexWeb.RunDetailLive do
       seconds < 3600 -> "#{div(seconds, 60)}m #{rem(seconds, 60)}s"
       true -> "#{div(seconds, 3600)}h #{rem(div(seconds, 60), 60)}m"
     end
+  end
+
+  defp elapsed_since(started_at) do
+    DateTime.diff(DateTime.utc_now(), started_at, :second)
+    |> max(0)
+    |> format_duration_seconds()
   end
 
   # -- Diagnostics helpers --

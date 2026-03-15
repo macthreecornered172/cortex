@@ -214,7 +214,9 @@ defmodule Cortex.Orchestration.Runner do
   end
 
   defp validate_run_workspace(run) do
-    if is_nil(run.workspace_path), do: {:error, :no_workspace_path}, else: {:ok, run.workspace_path}
+    if is_nil(run.workspace_path),
+      do: {:error, :no_workspace_path},
+      else: {:ok, run.workspace_path}
   end
 
   defp load_run_config(run) do

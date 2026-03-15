@@ -43,7 +43,9 @@ defmodule Cortex.Orchestration.Summary do
     total_input =
       state.teams
       |> Map.values()
-      |> Enum.map(fn ts -> ts.input_tokens || 0 end)
+      |> Enum.map(fn ts ->
+        (ts.input_tokens || 0) + (ts.cache_read_tokens || 0) + (ts.cache_creation_tokens || 0)
+      end)
       |> Enum.sum()
 
     total_output =
@@ -64,7 +66,11 @@ defmodule Cortex.Orchestration.Summary do
       Enum.map(team_names, fn name ->
         ts = Map.fetch!(state.teams, name)
 
-        tokens_str = format_tokens_pair(ts.input_tokens, ts.output_tokens)
+        team_total_input =
+          (ts.input_tokens || 0) + (ts.cache_read_tokens || 0) +
+            (ts.cache_creation_tokens || 0)
+
+        tokens_str = format_tokens_pair(team_total_input, ts.output_tokens)
         {name, ts.status || "pending", tokens_str, format_duration(ts.duration_ms)}
       end)
 

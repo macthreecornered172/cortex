@@ -218,7 +218,14 @@ defmodule CortexWeb.RunListLive do
                 </div>
               </td>
               <td class="px-4 py-3 text-sm text-gray-300">{run.team_count || 0}</td>
-              <td class="px-4 py-3"><.token_display input={run.total_input_tokens} output={run.total_output_tokens} /></td>
+              <td class="px-4 py-3"><.token_detail
+                id={"run-#{run.id}-tokens"}
+                input={run.total_input_tokens}
+                output={run.total_output_tokens}
+                cache_read={run.total_cache_read_tokens}
+                cache_creation={run.total_cache_creation_tokens}
+                cost={run.total_cost_usd}
+              /></td>
               <td class="px-4 py-3"><.duration_display ms={run.total_duration_ms} /></td>
               <td class="px-4 py-3 text-sm text-gray-400">{format_time(run.started_at || run.inserted_at)}</td>
               <td class="px-4 py-3 text-right">

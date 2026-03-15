@@ -70,7 +70,8 @@ defmodule Cortex.Coordinator.Lifecycle do
       model: CoordConfig.model(),
       max_turns: CoordConfig.max_turns(),
       permission_mode: CoordConfig.permission_mode(),
-      timeout_minutes: CoordConfig.timeout_minutes(config.defaults.timeout_minutes, length(tiers)),
+      timeout_minutes:
+        CoordConfig.timeout_minutes(config.defaults.timeout_minutes, length(tiers)),
       log_path: log_path,
       command: command,
       cwd: Path.dirname(workspace.path),

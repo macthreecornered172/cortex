@@ -167,6 +167,78 @@ defmodule CortexWeb.CoreComponents do
     """
   end
 
+  @doc """
+  Click-to-expand token breakdown showing cache details and cost.
+
+  Shows compact "in / out" by default. Click to reveal:
+  input, cache read, cache creation, output, and cost.
+
+  ## Examples
+
+      <.token_detail
+        input={16584}
+        output={45}
+        cache_read={12000}
+        cache_creation={3000}
+        cost={0.0523}
+      />
+  """
+  attr(:input, :integer, default: nil)
+  attr(:output, :integer, default: nil)
+  attr(:cache_read, :integer, default: nil)
+  attr(:cache_creation, :integer, default: nil)
+  attr(:cost, :float, default: nil)
+  attr(:id, :string, required: true)
+
+  def token_detail(assigns) do
+    combined_input =
+      (assigns.input || 0) + (assigns.cache_read || 0) + (assigns.cache_creation || 0)
+
+    assigns = assign(assigns, :combined_input, combined_input)
+
+    ~H"""
+    <span class="relative inline-block">
+      <button
+        phx-click={JS.toggle(to: "##{@id}-detail")}
+        class="text-sm font-mono text-gray-300 hover:text-cortex-300 transition-colors cursor-pointer"
+        title="Click for token breakdown"
+      >
+        {format_token_pair(@combined_input, @output)}
+      </button>
+      <div
+        id={"#{@id}-detail"}
+        class="hidden absolute z-20 top-full left-0 mt-1 bg-gray-900 border border-gray-700 rounded-lg p-3 shadow-xl min-w-[200px]"
+        phx-click-away={JS.hide(to: "##{@id}-detail")}
+      >
+        <div class="space-y-1.5 text-xs font-mono">
+          <div class="flex justify-between gap-4">
+            <span class="text-gray-500">Input</span>
+            <span class="text-gray-300">{format_token_count(@input)}</span>
+          </div>
+          <div class="flex justify-between gap-4">
+            <span class="text-gray-500">Cache Read</span>
+            <span class="text-emerald-400">{format_token_count(@cache_read)}</span>
+          </div>
+          <div class="flex justify-between gap-4">
+            <span class="text-gray-500">Cache Create</span>
+            <span class="text-yellow-400">{format_token_count(@cache_creation)}</span>
+          </div>
+          <div class="border-t border-gray-700 pt-1.5 flex justify-between gap-4">
+            <span class="text-gray-500">Output</span>
+            <span class="text-gray-300">{format_token_count(@output)}</span>
+          </div>
+          <%= if @cost do %>
+            <div class="border-t border-gray-700 pt-1.5 flex justify-between gap-4">
+              <span class="text-gray-500">Cost</span>
+              <span class="text-cortex-400">{format_cost(@cost)}</span>
+            </div>
+          <% end %>
+        </div>
+      </div>
+    </span>
+    """
+  end
+
   defp format_token_count(nil), do: "0"
   defp format_token_count(0), do: "0"
   defp format_token_count(n) when is_integer(n) and n < 1_000, do: Integer.to_string(n)

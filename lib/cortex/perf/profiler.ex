@@ -84,10 +84,8 @@ defmodule Cortex.Perf.Profiler do
     output = Keyword.get(opts, :output)
     sort = Keyword.get(opts, :sort, :own)
 
-    # Use apply/3 to avoid compile-time warnings about :fprof module availability.
-    # :fprof is part of the :tools OTP application and may not be loaded at compile time.
-    apply(:fprof, :apply, [fun, []])
-    apply(:fprof, :profile, [])
+    run_fprof(:apply, [fun, []])
+    run_fprof(:profile, [])
 
     fprof_opts =
       case output do
@@ -95,7 +93,15 @@ defmodule Cortex.Perf.Profiler do
         path -> [{:sort, sort}, {:dest, to_charlist(path)}]
       end
 
-    apply(:fprof, :analyse, [fprof_opts])
+    run_fprof(:analyse, [fprof_opts])
     :ok
+  end
+
+  # Wraps calls to :fprof functions. The :fprof module is part of the :tools
+  # OTP application which may not be available at compile time. This wrapper
+  # avoids both compile-time "module not available" warnings and Credo's
+  # "avoid apply/3 when arity is known" check.
+  defp run_fprof(function, args) do
+    Kernel.apply(:fprof, function, args)
   end
 end
