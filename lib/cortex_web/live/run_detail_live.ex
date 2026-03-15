@@ -723,6 +723,51 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
+  def handle_event("continue_run", _params, socket) do
+    run = socket.assigns.run
+
+    if run do
+      run_id = run.id
+
+      entry = %{
+        team: "system",
+        text: "Continuing run — spawning remaining teams...",
+        kind: :resume,
+        at: format_now()
+      }
+
+      socket = assign(socket, activities: prepend_activity(socket.assigns.activities, entry))
+
+      Task.start(fn ->
+        case Cortex.Orchestration.Runner.continue_run(run_id) do
+          {:ok, _summary} ->
+            Cortex.Events.broadcast(:team_resume_result, %{
+              run_id: run_id,
+              team_name: "system",
+              status: :success,
+              reason: "run continued successfully"
+            })
+
+            Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
+
+          {:error, reason} ->
+            Cortex.Events.broadcast(:team_resume_result, %{
+              run_id: run_id,
+              team_name: "system",
+              status: :failure,
+              reason: "continue failed: #{inspect(reason)}"
+            })
+
+            Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
+        end
+      end)
+
+      {:noreply, put_flash(socket, :info, "Continuing run — remaining teams will be spawned...")}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_event("generate_summary", _params, socket) do
     summary =
       build_run_summary(socket.assigns.run, socket.assigns.team_runs, socket.assigns.last_seen)
@@ -811,6 +856,27 @@ defmodule CortexWeb.RunDetailLive do
               />
             </form>
           <% end %>
+        </div>
+      <% end %>
+
+      <!-- Continue Run Banner (visible when run has pending teams that were never started) -->
+      <%= if has_pending_teams?(@team_runs) and @run.status in ["running", "failed"] do %>
+        <div class="bg-blue-900/30 border border-blue-800 rounded-lg p-4 mb-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-blue-300 font-medium">Run interrupted — {count_by_status(@team_runs, "pending")} pending team(s)</p>
+              <p class="text-blue-200/70 text-sm">
+                The coordinator process died before all tiers completed.
+                Pending: <span class="font-mono">{pending_team_names(@team_runs) |> Enum.join(", ")}</span>
+              </p>
+            </div>
+            <button
+              phx-click="continue_run"
+              class="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 shrink-0"
+            >
+              Continue Run
+            </button>
+          </div>
         </div>
       <% end %>
 
@@ -1495,6 +1561,19 @@ defmodule CortexWeb.RunDetailLive do
   defp stalled_team_names(team_runs, last_seen) do
     team_runs
     |> Enum.filter(fn tr -> team_stalled?(tr, last_seen) end)
+    |> Enum.map(& &1.team_name)
+    |> Enum.sort()
+  end
+
+  # -- Pending/continue detection --
+
+  defp has_pending_teams?(team_runs) do
+    Enum.any?(team_runs, fn tr -> (tr.status || "pending") == "pending" end)
+  end
+
+  defp pending_team_names(team_runs) do
+    team_runs
+    |> Enum.filter(fn tr -> (tr.status || "pending") == "pending" end)
     |> Enum.map(& &1.team_name)
     |> Enum.sort()
   end

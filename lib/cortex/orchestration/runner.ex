@@ -241,6 +241,313 @@ defmodule Cortex.Orchestration.Runner do
     end
   end
 
+  @doc """
+  Continues a run that was interrupted (e.g., Runner process died, terminal closed).
+
+  Reads the run's config_yaml from the DB, rebuilds the DAG, identifies which
+  teams already completed, and executes the remaining tiers from where the run
+  left off. Completed teams are skipped; their results are preserved and
+  injected as context into downstream teams via the workspace state.
+
+  Teams with status "running" (zombies from the dead Runner) are reset to
+  "pending" before re-execution. Existing team_run records are updated
+  rather than duplicated.
+
+  ## Parameters
+
+    - `run_id` — the UUID of the run to continue
+    - `opts` — keyword options:
+      - `:command` — override the claude command (default "claude")
+      - `:continue_on_error` — continue past tier failures (default true)
+
+  ## Returns
+
+    - `{:ok, summary_map}` — on success
+    - `{:error, reason}` — on failure
+
+  """
+  @spec continue_run(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def continue_run(run_id, opts \\ []) do
+    command = Keyword.get(opts, :command, "claude")
+    continue_on_error = Keyword.get(opts, :continue_on_error, true)
+
+    run = safe_store_call(fn -> Cortex.Store.get_run(run_id) end)
+
+    cond do
+      is_nil(run) ->
+        {:error, :run_not_found}
+
+      is_nil(run.config_yaml) ->
+        {:error, :no_config_yaml}
+
+      is_nil(run.workspace_path) ->
+        {:error, :no_workspace_path}
+
+      true ->
+        case Loader.load_string(run.config_yaml) do
+          {:ok, config, _warnings} ->
+            case DAG.build_tiers(config.teams) do
+              {:ok, all_tiers} ->
+                execute_continuation(
+                  run,
+                  config,
+                  all_tiers,
+                  command,
+                  continue_on_error
+                )
+
+              {:error, _} = err ->
+                err
+            end
+
+          {:error, errors} ->
+            {:error, {:invalid_config, errors}}
+        end
+    end
+  end
+
+  @spec execute_continuation(map(), Config.t(), [[String.t()]], String.t(), boolean()) ::
+          {:ok, map()} | {:error, term()}
+  defp execute_continuation(run, config, all_tiers, command, continue_on_error) do
+    run_id = run.id
+    workspace_path = run.workspace_path
+
+    team_runs = safe_store_call(fn -> Cortex.Store.get_team_runs(run_id) end) || []
+
+    completed_teams =
+      team_runs
+      |> Enum.filter(fn tr -> tr.status in ["completed", "done"] end)
+      |> MapSet.new(& &1.team_name)
+
+    filtered_tiers =
+      Enum.map(all_tiers, fn tier_teams ->
+        Enum.reject(tier_teams, &MapSet.member?(completed_teams, &1))
+      end)
+
+    if Enum.all?(filtered_tiers, &(&1 == [])) do
+      {:error, :all_teams_completed}
+    else
+      # Reset zombie "running" teams back to pending
+      Enum.each(team_runs, fn tr ->
+        if tr.status == "running" do
+          safe_store_call(fn ->
+            fresh = Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, tr.id)
+
+            if fresh do
+              Cortex.Store.update_team_run(fresh, %{
+                status: "pending",
+                started_at: nil,
+                completed_at: nil,
+                result_summary: nil,
+                session_id: nil
+              })
+            end
+          end)
+        end
+      end)
+
+      # Mark run as running
+      safe_store_call(fn ->
+        fresh = Cortex.Store.get_run(run_id)
+        if fresh, do: Cortex.Store.update_run(fresh, %{status: "running"})
+      end)
+
+      # Open existing workspace (don't re-init — state.json has completed results)
+      workspace = %Workspace{path: Path.join(workspace_path, ".cortex")}
+      team_names = Enum.map(config.teams, & &1.name)
+
+      _watcher_pid =
+        safe_start_watcher(
+          workspace_path: workspace_path,
+          run_id: run_id,
+          team_names: team_names
+        )
+
+      broadcast(:run_started, %{project: config.name, teams: team_names})
+      Tel.emit_run_started(%{project: config.name, teams: team_names})
+
+      run_start = System.monotonic_time(:millisecond)
+
+      result =
+        run_continue_tiers(
+          filtered_tiers,
+          config,
+          workspace,
+          command,
+          continue_on_error,
+          run_id
+        )
+
+      run_duration = System.monotonic_time(:millisecond) - run_start
+
+      finalize_continuation(result, run_id, config, run_duration)
+    end
+  end
+
+  @spec run_continue_tiers(
+          [[String.t()]],
+          Config.t(),
+          Workspace.t(),
+          String.t(),
+          boolean(),
+          String.t() | nil
+        ) ::
+          {:ok, :complete} | {:error, {:tier_failed, non_neg_integer(), [String.t()]}}
+  defp run_continue_tiers(filtered_tiers, config, workspace, command, continue_on_error, run_id) do
+    filtered_tiers
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, :complete}, fn {team_names, tier_index}, acc ->
+      if team_names == [] do
+        # All teams in this tier already completed — skip
+        {:cont, acc}
+      else
+        broadcast(:tier_started, %{tier: tier_index, teams: team_names})
+
+        {:ok, state} = Workspace.read_state(workspace)
+
+        now = DateTime.utc_now() |> DateTime.to_iso8601()
+
+        Enum.each(team_names, fn name ->
+          Workspace.update_team_state(workspace, name, status: "running")
+          Workspace.update_registry_entry(workspace, name, status: "running", started_at: now)
+
+          # Upsert team_run in DB (may already exist from original run)
+          safe_store_call(fn ->
+            if run_id do
+              team = find_team(config.teams, name)
+              team_prompt = Injection.build_prompt(team, config.name, state, config.defaults)
+              team_log_path = Workspace.log_path(workspace, name)
+
+              case Cortex.Store.get_team_run(run_id, name) do
+                nil ->
+                  Cortex.Store.create_team_run(%{
+                    run_id: run_id,
+                    team_name: name,
+                    role: team && team.lead && team.lead.role,
+                    tier: tier_index,
+                    status: "running",
+                    prompt: team_prompt,
+                    log_path: team_log_path,
+                    started_at: DateTime.utc_now()
+                  })
+
+                existing ->
+                  Cortex.Store.update_team_run(existing, %{
+                    status: "running",
+                    prompt: team_prompt,
+                    log_path: team_log_path,
+                    started_at: DateTime.utc_now(),
+                    completed_at: nil,
+                    result_summary: nil,
+                    session_id: nil
+                  })
+              end
+            end
+          end)
+        end)
+
+        outcomes =
+          team_names
+          |> Enum.map(fn name ->
+            Task.async(fn ->
+              run_team(name, config, workspace, state, command, run_id)
+            end)
+          end)
+          |> Task.await_many(@default_task_timeout_ms)
+
+        Enum.each(outcomes, fn outcome ->
+          apply_outcome(workspace, outcome)
+          apply_store_outcome(run_id, outcome)
+        end)
+
+        failures =
+          outcomes
+          |> Enum.filter(fn {_name, status, _data} -> status != :ok end)
+          |> Enum.map(fn {name, _, _} -> name end)
+
+        broadcast(:tier_completed, %{tier: tier_index, teams: team_names, failures: failures})
+        Tel.emit_tier_completed(%{tier_index: tier_index, teams: team_names, failures: failures})
+
+        cond do
+          failures == [] ->
+            {:cont, acc}
+
+          continue_on_error ->
+            {:cont, acc}
+
+          true ->
+            {:halt, {:error, {:tier_failed, tier_index, failures}}}
+        end
+      end
+    end)
+  end
+
+  @spec finalize_continuation(
+          {:ok, :complete} | {:error, term()},
+          String.t(),
+          Config.t(),
+          non_neg_integer()
+        ) :: {:ok, map()} | {:error, term()}
+  defp finalize_continuation({:ok, _}, run_id, config, run_duration) do
+    broadcast(:run_completed, %{project: config.name, duration_ms: run_duration})
+
+    Tel.emit_run_completed(%{
+      project: config.name,
+      duration_ms: run_duration,
+      status: :complete
+    })
+
+    safe_store_call(fn ->
+      fresh = Cortex.Store.get_run(run_id)
+
+      if fresh do
+        all_team_runs = Cortex.Store.get_team_runs(run_id)
+        total_cost = all_team_runs |> Enum.map(&(&1.cost_usd || 0.0)) |> Enum.sum()
+        total_input = all_team_runs |> Enum.map(&(&1.input_tokens || 0)) |> Enum.sum()
+        total_output = all_team_runs |> Enum.map(&(&1.output_tokens || 0)) |> Enum.sum()
+
+        Cortex.Store.update_run(fresh, %{
+          status: "completed",
+          total_cost_usd: total_cost,
+          total_input_tokens: total_input,
+          total_output_tokens: total_output,
+          total_duration_ms: (fresh.total_duration_ms || 0) + run_duration,
+          completed_at: DateTime.utc_now()
+        })
+      end
+    end)
+
+    {:ok, %{status: :continued, run_id: run_id, duration_ms: run_duration}}
+  end
+
+  defp finalize_continuation({:error, _} = error, run_id, config, run_duration) do
+    broadcast(:run_completed, %{
+      project: config.name,
+      duration_ms: run_duration,
+      status: :failed
+    })
+
+    Tel.emit_run_completed(%{
+      project: config.name,
+      duration_ms: run_duration,
+      status: :failed
+    })
+
+    safe_store_call(fn ->
+      fresh = Cortex.Store.get_run(run_id)
+
+      if fresh do
+        Cortex.Store.update_run(fresh, %{
+          status: "failed",
+          total_duration_ms: (fresh.total_duration_ms || 0) + run_duration,
+          completed_at: DateTime.utc_now()
+        })
+      end
+    end)
+
+    error
+  end
+
   @spec find_dead_teams(State.t()) :: [String.t()]
   defp find_dead_teams(state) do
     state.teams
