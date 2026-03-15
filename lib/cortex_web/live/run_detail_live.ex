@@ -29,7 +29,7 @@ defmodule CortexWeb.RunDetailLive do
            current_tab: "overview",
            last_seen: %{},
            selected_log_team: nil,
-           log_content: nil,
+           log_lines: nil,
            messages_team: nil,
            team_inbox: [],
            team_outbox: []
@@ -57,7 +57,7 @@ defmodule CortexWeb.RunDetailLive do
            current_tab: "overview",
            last_seen: %{},
            selected_log_team: nil,
-           log_content: nil,
+           log_lines: nil,
            messages_team: nil,
            team_inbox: [],
            team_outbox: []
@@ -256,13 +256,13 @@ defmodule CortexWeb.RunDetailLive do
     socket =
       cond do
         socket.assigns.selected_log_team ->
-          log_content = read_team_log(socket.assigns.run, socket.assigns.selected_log_team)
-          assign(socket, log_content: log_content)
+          log_lines = read_team_log(socket.assigns.run, socket.assigns.selected_log_team)
+          assign(socket, log_lines: log_lines)
 
         socket.assigns.team_names != [] ->
           first = hd(socket.assigns.team_names)
-          log_content = read_team_log(socket.assigns.run, first)
-          assign(socket, selected_log_team: first, log_content: log_content)
+          log_lines = read_team_log(socket.assigns.run, first)
+          assign(socket, selected_log_team: first, log_lines: log_lines)
 
         true ->
           socket
@@ -290,18 +290,18 @@ defmodule CortexWeb.RunDetailLive do
   # -- Event handlers: log team selection --
 
   def handle_event("select_log_team", %{"team" => ""}, socket) do
-    {:noreply, assign(socket, selected_log_team: nil, log_content: nil)}
+    {:noreply, assign(socket, selected_log_team: nil, log_lines: nil)}
   end
 
   def handle_event("select_log_team", %{"team" => team_name}, socket) do
-    log_content = read_team_log(socket.assigns.run, team_name)
-    {:noreply, assign(socket, selected_log_team: team_name, log_content: log_content)}
+    log_lines = read_team_log(socket.assigns.run, team_name)
+    {:noreply, assign(socket, selected_log_team: team_name, log_lines: log_lines)}
   end
 
   def handle_event("refresh_logs", _params, socket) do
     if socket.assigns.selected_log_team do
-      log_content = read_team_log(socket.assigns.run, socket.assigns.selected_log_team)
-      {:noreply, assign(socket, log_content: log_content)}
+      log_lines = read_team_log(socket.assigns.run, socket.assigns.selected_log_team)
+      {:noreply, assign(socket, log_lines: log_lines)}
     else
       {:noreply, socket}
     end
@@ -777,12 +777,32 @@ defmodule CortexWeb.RunDetailLive do
                 <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">
                   {@selected_log_team}.log
                 </h2>
-                <span :if={@log_content} class="text-xs text-gray-600">
-                  {length(String.split(@log_content, "\n"))} lines (last 500)
+                <span :if={@log_lines} class="text-xs text-gray-600">
+                  {length(@log_lines)} lines (last 500)
                 </span>
               </div>
-              <%= if @log_content do %>
-                <pre class="bg-gray-950 rounded p-4 text-xs text-gray-400 font-mono overflow-x-auto max-h-[75vh] overflow-y-auto whitespace-pre-wrap break-all"><%= @log_content %></pre>
+              <%= if @log_lines do %>
+                <div class="max-h-[75vh] overflow-y-auto rounded bg-gray-950 divide-y divide-gray-800/50">
+                  <div
+                    :for={line <- @log_lines}
+                    class={["flex items-start gap-3 px-3 py-2 group",
+                      if(rem(line.num, 2) == 0, do: "bg-gray-950", else: "bg-gray-900/30")
+                    ]}
+                  >
+                    <span class="text-gray-600 font-mono text-xs select-none shrink-0 w-8 text-right pt-0.5">
+                      {line.num}
+                    </span>
+                    <span
+                      :if={line.type}
+                      class={["shrink-0 rounded px-1.5 py-0.5 text-xs font-medium", log_type_class(line.type)]}
+                    >
+                      {line.type}
+                    </span>
+                    <code class="text-gray-400 text-xs font-mono overflow-x-auto whitespace-nowrap block flex-1 pt-0.5">
+                      {line.raw}
+                    </code>
+                  </div>
+                </div>
               <% else %>
                 <p class="text-gray-500 text-sm">No log file found for this team.</p>
               <% end %>
@@ -985,14 +1005,33 @@ defmodule CortexWeb.RunDetailLive do
         {:ok, content} ->
           content
           |> String.split("\n")
+          |> Enum.reject(&(&1 == ""))
           |> Enum.take(-@max_log_lines)
-          |> Enum.join("\n")
+          |> Enum.with_index(1)
+          |> Enum.map(fn {line, idx} ->
+            %{raw: line, type: extract_log_type(line), num: idx}
+          end)
 
         {:error, _} ->
           nil
       end
     end
   end
+
+  defp extract_log_type(line) do
+    case Jason.decode(line) do
+      {:ok, %{"type" => type}} -> type
+      _ -> nil
+    end
+  end
+
+  defp log_type_class("assistant"), do: "bg-blue-900/50 text-blue-300"
+  defp log_type_class("system"), do: "bg-purple-900/50 text-purple-300"
+  defp log_type_class("result"), do: "bg-cyan-900/50 text-cyan-300"
+  defp log_type_class("error"), do: "bg-red-900/50 text-red-300"
+  defp log_type_class("tool_use"), do: "bg-green-900/50 text-green-300"
+  defp log_type_class("tool_result"), do: "bg-emerald-900/50 text-emerald-300"
+  defp log_type_class(_), do: "bg-gray-800/50 text-gray-400"
 
   defp read_team_messages(run, team_name) do
     if run && run.workspace_path do
