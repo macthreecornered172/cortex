@@ -36,6 +36,7 @@ defmodule Cortex.Orchestration.Runner do
 
   """
 
+  alias Cortex.Messaging.InboxBridge
   alias Cortex.Orchestration.Config
   alias Cortex.Orchestration.Config.Loader
   alias Cortex.Orchestration.DAG
@@ -89,6 +90,36 @@ defmodule Cortex.Orchestration.Runner do
     else
       {:error, _} = error -> error
     end
+  end
+
+  @doc """
+  Sends a message to a running team's file-based inbox.
+
+  Delivers a message to the team's inbox file so that the team's
+  `claude -p` session can pick it up via its `/loop` polling.
+
+  ## Parameters
+
+    - `workspace_path` -- the project root directory
+    - `from` -- sender identifier (e.g. "coordinator" or another team name)
+    - `to_team` -- the recipient team name
+    - `content` -- the message content string
+
+  ## Returns
+
+  `:ok`
+  """
+  @spec send_message(String.t(), String.t(), String.t(), String.t()) :: :ok
+  def send_message(workspace_path, from, to_team, content) do
+    message = %{
+      from: from,
+      to: to_team,
+      content: content,
+      timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+      type: "message"
+    }
+
+    InboxBridge.deliver(workspace_path, to_team, message)
   end
 
   # -- Dry Run -----------------------------------------------------------------

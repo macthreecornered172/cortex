@@ -27,6 +27,7 @@ defmodule Cortex.Orchestration.Workspace do
 
   """
 
+  alias Cortex.Messaging.InboxBridge
   alias Cortex.Orchestration.FileUtils
   alias Cortex.Orchestration.State
   alias Cortex.Orchestration.TeamState
@@ -44,6 +45,7 @@ defmodule Cortex.Orchestration.Workspace do
   @registry_file "registry.json"
   @results_dir "results"
   @logs_dir "logs"
+  @messages_dir "messages"
 
   # --- Init / Open ---
 
@@ -71,11 +73,14 @@ defmodule Cortex.Orchestration.Workspace do
   @spec init(Path.t(), map()) :: {:ok, t()} | {:error, term()}
   def init(path, config) when is_binary(path) and is_map(config) do
     cortex_path = Path.join(path, @cortex_dir)
+    team_names = Map.get(config, :teams, [])
 
     with :ok <- File.mkdir_p(Path.join(cortex_path, @results_dir)),
          :ok <- File.mkdir_p(Path.join(cortex_path, @logs_dir)),
+         :ok <- File.mkdir_p(Path.join(cortex_path, @messages_dir)),
          :ok <- seed_state(cortex_path, config),
-         :ok <- seed_registry(cortex_path, config) do
+         :ok <- seed_registry(cortex_path, config),
+         :ok <- InboxBridge.setup(path, team_names) do
       {:ok, %__MODULE__{path: cortex_path}}
     end
   end

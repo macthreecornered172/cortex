@@ -34,6 +34,7 @@ defmodule Cortex.Orchestration.Injection do
       build_team_section(team),
       build_tasks_section(team),
       build_dependencies_section(team, state),
+      build_inbox_section(team),
       build_instructions_section()
     ]
 
@@ -179,6 +180,41 @@ defmodule Cortex.Orchestration.Injection do
       "## Context from Previous Teams\n#{Enum.join(completed, "\n\n")}"
     end
   end
+
+  defp build_inbox_section(%Team{name: name, members: members}) do
+    team_lead_extra =
+      if has_members?(members) do
+        "\nAs team lead, check your inbox more frequently for coordination messages.\n" <>
+          "The coordinator may send corrections, priority changes, or answers to questions."
+      else
+        ""
+      end
+
+    """
+    ## Message Inbox
+    You have a message inbox that the coordinator and other teams can write to.
+    Check it periodically for guidance, corrections, or additional context.
+
+    Your inbox file: .cortex/messages/#{name}/inbox.json
+    Your outbox file: .cortex/messages/#{name}/outbox.json
+
+    To check your inbox, set up a loop:
+    /loop 2m cat .cortex/messages/#{name}/inbox.json
+
+    If you see new messages, read them and adjust your work accordingly.
+
+    To send a message to the coordinator or another team, append to your outbox:
+    Write a JSON message to .cortex/messages/#{name}/outbox.json
+
+    Format: [{"from": "#{name}", "to": "coordinator", "content": "your message", "timestamp": "<ISO8601>"}]\
+    """
+    |> String.trim()
+    |> Kernel.<>(team_lead_extra)
+  end
+
+  defp has_members?(nil), do: false
+  defp has_members?([]), do: false
+  defp has_members?(_members), do: true
 
   defp build_instructions_section do
     "## Instructions\n" <>
