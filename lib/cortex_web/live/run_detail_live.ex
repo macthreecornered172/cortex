@@ -1023,14 +1023,6 @@ defmodule CortexWeb.RunDetailLive do
                 <.token_display input={team.input_tokens} output={team.output_tokens} />
                 <.duration_display ms={team.duration_ms} />
               </div>
-              <div
-                :if={(team.status || "pending") == "running"}
-                class="mt-2 text-xs"
-              >
-                <span class={health_indicator_class(team, @last_seen)}>
-                  {health_indicator_text(team, @last_seen)}
-                </span>
-              </div>
             </a>
           </div>
         <% end %>
@@ -1994,25 +1986,6 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
-  defp health_indicator_class(team, last_seen) do
-    seconds =
-      case Map.get(last_seen, team.team_name) do
-        nil ->
-          case team.started_at do
-            nil -> 999_999
-            ts -> DateTime.diff(DateTime.utc_now(), ts, :second)
-          end
-
-        ts ->
-          DateTime.diff(DateTime.utc_now(), ts, :second)
-      end
-
-    cond do
-      seconds < 60 -> "text-green-400"
-      seconds < @stale_threshold_seconds -> "text-yellow-400"
-      true -> "text-red-400"
-    end
-  end
 
   defp safe_store_call(fun) do
     try do

@@ -270,8 +270,22 @@ defmodule CortexWeb.TeamDetailLive do
       </:actions>
     </.header>
 
-    <!-- Resume Banner (for stalled/running teams with a session to resume) -->
-    <%= if @team_run && (@team_run.status || "pending") in ["running", "failed"] && @diagnostics && @diagnostics.session_id do %>
+    <!-- Mark Failed button (only for actively running teams — separate from diagnostics) -->
+    <%= if @team_run && (@team_run.status || "pending") == "running" do %>
+      <div class="flex items-center justify-end mb-4">
+        <button
+          phx-click="mark_failed"
+          data-confirm="Mark this team as failed?"
+          class="rounded bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-600"
+          title="Update DB status to failed"
+        >
+          Mark Failed
+        </button>
+      </div>
+    <% end %>
+
+    <!-- Diagnostics Banner (only for failed/completed teams — not while actively running) -->
+    <%= if @team_run && (@team_run.status || "pending") == "failed" && @diagnostics && @diagnostics.session_id do %>
       <div class={[
         "rounded-lg border p-4 mb-6",
         if(@diagnostics.has_result, do: "bg-gray-900 border-gray-800", else: "bg-yellow-900/30 border-yellow-800")
@@ -283,9 +297,6 @@ defmodule CortexWeb.TeamDetailLive do
             </p>
             <p :if={@diagnostics.session_id} class="text-sm text-gray-400 mt-1">
               Session: <code class="font-mono text-cortex-400">{@diagnostics.session_id}</code>
-              <%= if @diagnostics.cost_usd do %>
-                | Cost: ${Float.round(@diagnostics.cost_usd * 1.0, 4)}
-              <% end %>
               <%= if @diagnostics.total_input_tokens > 0 do %>
                 | Tokens: {format_token_count(@diagnostics.total_input_tokens)} in / {format_token_count(@diagnostics.total_output_tokens)} out
               <% end %>
@@ -314,15 +325,6 @@ defmodule CortexWeb.TeamDetailLive do
               title="Start fresh session with context from previous run"
             >
               Restart
-            </button>
-            <button
-              :if={(@team_run.status || "pending") == "running"}
-              phx-click="mark_failed"
-              data-confirm="Mark this team as failed?"
-              class="rounded bg-red-700 px-4 py-2 text-sm font-medium text-white hover:bg-red-600 shrink-0"
-              title="Update DB status to failed"
-            >
-              Mark Failed
             </button>
           </div>
         </div>
