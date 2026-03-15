@@ -181,8 +181,8 @@ teams:
     lead:
       role: "Compiler Engineer — builds the lexer, parser, and codegen"
     members:
-      - role: "Parser Developer"
-        focus: "Implement the NimbleParsec grammar from the spec. Own the parser module."
+      - role: "Implementation Developer"
+        focus: "Implement the core DSL-to-YAML translation from the spec. Own the main modules."
       - role: "QA Engineer"
         focus: "Write test cases: valid inputs that compile correctly, invalid inputs that produce clear errors."
     tasks:
@@ -208,15 +208,16 @@ teams:
 
       BUILD in /tmp/cortex-blitz/phoenix-compiler/:
       1. Create Mix project: `mix new phoenix_compiler`
-      2. lib/lexer.ex — tokenizer
-      3. lib/parser.ex — NimbleParsec grammar → AST
-      4. lib/codegen.ex — AST → orchestra.yaml (valid YAML output)
-      5. lib/compiler.ex — top-level module wiring lexer → parser → codegen
-      6. test/ — at least 5 test cases (3 valid, 2 error cases)
-      7. examples/ — at least 2 .phoenix files with expected .yaml output
-      8. README.md — usage instructions, language overview
+      2. Core modules — however you want to structure it (parser, transpiler, codegen, etc.)
+      3. test/ — at least 5 test cases (3 valid, 2 error cases)
+      4. examples/ — at least 2 .phoenix files with expected .yaml output
+      5. README.md — usage instructions, language overview
 
-      The compiler must ACTUALLY WORK: `mix run -e 'PhoenixCompiler.compile_file("example.phoenix")'`
+      NOTE: This does NOT have to be a traditional compiler with a formal lexer/parser/AST.
+      A transpiler, template engine, or any approach that takes your DSL as input and produces
+      valid orchestra.yaml as output is fine. Pick the simplest approach that works.
+
+      It must ACTUALLY WORK: `mix run -e 'PhoenixCompiler.compile_file("example.phoenix")'`
       should produce valid orchestra.yaml on stdout.
 
       VERIFY: After building, run `mix compile` and `mix test` to confirm everything works.
@@ -226,8 +227,8 @@ teams:
     lead:
       role: "Compiler Engineer — builds the lexer, parser, and codegen"
     members:
-      - role: "Parser Developer"
-        focus: "Implement the NimbleParsec grammar from the spec. Own the parser module."
+      - role: "Implementation Developer"
+        focus: "Implement the core DSL-to-YAML translation from the spec. Own the main modules."
       - role: "QA Engineer"
         focus: "Write test cases: valid inputs that compile correctly, invalid inputs that produce clear errors."
     tasks:
@@ -253,15 +254,16 @@ teams:
 
       BUILD in /tmp/cortex-blitz/nova-compiler/:
       1. Create Mix project: `mix new nova_compiler`
-      2. lib/lexer.ex — tokenizer
-      3. lib/parser.ex — NimbleParsec grammar → AST
-      4. lib/codegen.ex — AST → orchestra.yaml (valid YAML output)
-      5. lib/compiler.ex — top-level module wiring lexer → parser → codegen
-      6. test/ — at least 5 test cases (3 valid, 2 error cases)
-      7. examples/ — at least 2 .nova files with expected .yaml output
-      8. README.md — usage instructions, language overview
+      2. Core modules — however you want to structure it (parser, transpiler, codegen, etc.)
+      3. test/ — at least 5 test cases (3 valid, 2 error cases)
+      4. examples/ — at least 2 .nova files with expected .yaml output
+      5. README.md — usage instructions, language overview
 
-      The compiler must ACTUALLY WORK: `mix run -e 'NovaCompiler.compile_file("example.nova")'`
+      NOTE: This does NOT have to be a traditional compiler with a formal lexer/parser/AST.
+      A transpiler, template engine, or any approach that takes your DSL as input and produces
+      valid orchestra.yaml as output is fine. Pick the simplest approach that works.
+
+      It must ACTUALLY WORK: `mix run -e 'NovaCompiler.compile_file("example.nova")'`
       should produce valid orchestra.yaml on stdout.
 
       VERIFY: After building, run `mix compile` and `mix test` to confirm everything works.
