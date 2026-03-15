@@ -554,13 +554,30 @@ defmodule Cortex.Orchestration.Runner do
     end
 
     on_activity = fn name, activity ->
-      broadcast(:team_activity, %{
-        run_id: run_id,
-        team_name: name,
-        type: activity.type,
-        tools: Map.get(activity, :tools, []),
-        timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
-      })
+      case activity.type do
+        :session_started ->
+          # Persist session_id immediately so it survives crashes
+          sid = Map.get(activity, :session_id)
+
+          Workspace.update_registry_entry(workspace, name, session_id: sid)
+
+          broadcast(:team_activity, %{
+            run_id: run_id,
+            team_name: name,
+            type: :session_started,
+            tools: [],
+            timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+          })
+
+        _ ->
+          broadcast(:team_activity, %{
+            run_id: run_id,
+            team_name: name,
+            type: activity.type,
+            tools: Map.get(activity, :tools, []),
+            timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+          })
+      end
     end
 
     spawner_opts = [

@@ -279,6 +279,14 @@ defmodule Cortex.Orchestration.Spawner do
         maybe_notify_tokens(state.on_token_update, state.team_name, state.tokens, new_tokens)
         maybe_notify_activities(state.on_activity, state.team_name, activities)
 
+        # Notify when session_id is first captured (so it can be persisted immediately)
+        if new_session_id && state.session_id == nil && state.on_activity do
+          state.on_activity.(state.team_name, %{
+            type: :session_started,
+            session_id: new_session_id
+          })
+        end
+
         collect_loop(port, timer_ref, log_device, %{
           state
           | buffer: new_buffer,
