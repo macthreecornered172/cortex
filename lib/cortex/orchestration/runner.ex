@@ -104,7 +104,7 @@ defmodule Cortex.Orchestration.Runner do
   @doc """
   Checks whether a Runner coordinator process is alive for a given run.
 
-  Returns `true` if a process registered under `{:runner, run_id}` exists
+  Returns `true` if a process registered under `{:coordinator, run_id}` exists
   and is alive, `false` otherwise. Uses an Elixir Registry lookup (ETS),
   so this is very fast.
   """

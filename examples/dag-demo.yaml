@@ -2,9 +2,9 @@ name: "dag-demo"
 
 defaults:
   model: haiku
-  max_turns: 20
+  max_turns: 50
   permission_mode: bypassPermissions
-  timeout_minutes: 5
+  timeout_minutes: 10
 
 teams:
   # --- Tier 0: Three parallel research teams (no dependencies) ---

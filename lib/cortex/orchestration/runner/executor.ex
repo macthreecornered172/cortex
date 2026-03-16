@@ -605,7 +605,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
   defp safe_register_runner(run_id) do
     Registry.register(
       Cortex.Orchestration.RunnerRegistry,
-      {:runner, run_id},
+      {:coordinator, run_id},
       %{started_at: DateTime.utc_now()}
     )
 
