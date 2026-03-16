@@ -138,6 +138,9 @@ defmodule Cortex.Gossip.SessionRunner do
       # Step 4b: Create TeamRun records so the UI can track agents
       create_team_run_records(run_id, config, workspace_path)
 
+      # Persist gossip round total to DB
+      persist_gossip_rounds(run_id, 0, config.gossip.rounds)
+
       broadcast(:gossip_started, %{project: config.name, agents: agent_names})
       Tel.emit_run_started(%{project: config.name, teams: agent_names, mode: :gossip})
 
@@ -153,7 +156,7 @@ defmodule Cortex.Gossip.SessionRunner do
         end
 
       # Step 6: Run exchange rounds (agents are running concurrently)
-      run_exchange_loop(config, stores, workspace_path, coordinator?)
+      run_exchange_loop(config, stores, workspace_path, coordinator?, run_id)
 
       # Step 6b: Signal agents to wrap up after rounds complete
       signal_agents_to_wrap_up(workspace_path, agent_names)
@@ -534,8 +537,8 @@ defmodule Cortex.Gossip.SessionRunner do
 
   # -- Exchange Loop -----------------------------------------------------------
 
-  @spec run_exchange_loop(GossipConfig.t(), %{String.t() => pid()}, String.t(), boolean()) :: :ok
-  defp run_exchange_loop(config, stores, workspace_path, coordinator?) do
+  @spec run_exchange_loop(GossipConfig.t(), %{String.t() => pid()}, String.t(), boolean(), String.t() | nil) :: :ok
+  defp run_exchange_loop(config, stores, workspace_path, coordinator?, run_id) do
     agent_names = Enum.map(config.agents, & &1.name)
     topology = Topology.build(agent_names, config.gossip.topology)
     interval_ms = config.gossip.exchange_interval_seconds * 1_000
@@ -548,6 +551,7 @@ defmodule Cortex.Gossip.SessionRunner do
       agent_names,
       topology,
       interval_ms,
+      run_id,
       1
     )
   end
@@ -560,6 +564,7 @@ defmodule Cortex.Gossip.SessionRunner do
          _agent_names,
          _topology,
          _interval_ms,
+         _run_id,
          round
        )
        when round > config.gossip.rounds do
@@ -574,6 +579,7 @@ defmodule Cortex.Gossip.SessionRunner do
          agent_names,
          topology,
          interval_ms,
+         run_id,
          round
        ) do
     # Wait for agents to accumulate findings
@@ -609,6 +615,7 @@ defmodule Cortex.Gossip.SessionRunner do
     end
 
     broadcast(:gossip_round_completed, %{round: round, total: config.gossip.rounds})
+    persist_gossip_rounds(run_id, round, config.gossip.rounds)
 
     # Check for early termination from coordinator
     if coordinator? && coordinator_requested_termination?(workspace_path) do
@@ -629,6 +636,7 @@ defmodule Cortex.Gossip.SessionRunner do
         agent_names,
         topology,
         interval_ms,
+        run_id,
         round + 1
       )
     end
@@ -851,6 +859,17 @@ defmodule Cortex.Gossip.SessionRunner do
       log_path: log_path,
       started_at: DateTime.utc_now()
     })
+  rescue
+    _ -> :ok
+  end
+
+  defp persist_gossip_rounds(nil, _current, _total), do: :ok
+
+  defp persist_gossip_rounds(run_id, current, total) do
+    case Cortex.Store.get_run(run_id) do
+      nil -> :ok
+      run -> Cortex.Store.update_run(run, %{gossip_rounds_completed: current, gossip_rounds_total: total})
+    end
   rescue
     _ -> :ok
   end

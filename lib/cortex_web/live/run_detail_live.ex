@@ -115,7 +115,7 @@ defmodule CortexWeb.RunDetailLive do
            run_summary: nil,
            summary_jobs: [],
            summaries_expanded: false,
-           gossip_round: nil,
+           gossip_round: reconstruct_gossip_round(run),
            gossip_knowledge: nil,
            pid_status: %{},
            editing_name: false,
@@ -3303,6 +3303,14 @@ defmodule CortexWeb.RunDetailLive do
   defp participant_label(run, :singular), do: if(gossip?(run), do: "node", else: "team")
   defp participant_label(run, :plural), do: if(gossip?(run), do: "Nodes", else: "Teams")
   defp participant_label(run, :lower_plural), do: if(gossip?(run), do: "nodes", else: "teams")
+
+  defp reconstruct_gossip_round(run) do
+    if run.mode == "gossip" and run.gossip_rounds_total > 0 do
+      %{current: run.gossip_rounds_completed || 0, total: run.gossip_rounds_total}
+    else
+      nil
+    end
+  end
 
   defp topology_description("full_mesh", count),
     do: "Every node shares knowledge with all #{count - 1} others each round"

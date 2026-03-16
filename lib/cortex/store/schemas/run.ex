@@ -28,6 +28,8 @@ defmodule Cortex.Store.Schemas.Run do
     field(:completed_at, :utc_datetime_usec)
     field(:workspace_path, :string)
     field(:mode, :string, default: "workflow")
+    field(:gossip_rounds_completed, :integer, default: 0)
+    field(:gossip_rounds_total, :integer, default: 0)
 
     has_many(:team_runs, TeamRun)
 
@@ -35,7 +37,7 @@ defmodule Cortex.Store.Schemas.Run do
   end
 
   @required_fields ~w(name)a
-  @optional_fields ~w(config_yaml status team_count total_cost_usd total_input_tokens total_output_tokens total_cache_read_tokens total_cache_creation_tokens total_duration_ms started_at completed_at workspace_path mode)a
+  @optional_fields ~w(config_yaml status team_count total_cost_usd total_input_tokens total_output_tokens total_cache_read_tokens total_cache_creation_tokens total_duration_ms started_at completed_at workspace_path mode gossip_rounds_completed gossip_rounds_total)a
 
   def changeset(run, attrs) do
     run
