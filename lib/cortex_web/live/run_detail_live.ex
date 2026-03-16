@@ -63,6 +63,7 @@ defmodule CortexWeb.RunDetailLive do
            summary_jobs: [],
            summaries_expanded: false,
            gossip_round: nil,
+           gossip_knowledge: nil,
            pid_status: %{},
            editing_name: false,
            name_form: %{"name" => ""},
@@ -115,6 +116,7 @@ defmodule CortexWeb.RunDetailLive do
            summary_jobs: [],
            summaries_expanded: false,
            gossip_round: nil,
+           gossip_knowledge: nil,
            pid_status: %{},
            editing_name: false,
            name_form: %{"name" => run.name || ""},
@@ -377,6 +379,32 @@ defmodule CortexWeb.RunDetailLive do
      socket
      |> assign(
        gossip_round: %{current: round, total: total},
+       activities: prepend_activity(socket.assigns.activities, entry)
+     )}
+  end
+
+  def handle_info(%{type: :gossip_completed, payload: payload}, socket) do
+    total_entries = Map.get(payload, :total_entries, 0)
+    by_topic = Map.get(payload, :by_topic, %{})
+    top_entries = Map.get(payload, :top_entries, [])
+
+    knowledge = %{
+      total_entries: total_entries,
+      by_topic: by_topic,
+      top_entries: top_entries
+    }
+
+    entry = %{
+      team: "system",
+      text: "Gossip complete — #{total_entries} knowledge entries across #{map_size(by_topic)} topics",
+      kind: :message,
+      at: format_now()
+    }
+
+    {:noreply,
+     socket
+     |> assign(
+       gossip_knowledge: knowledge,
        activities: prepend_activity(socket.assigns.activities, entry)
      )}
   end
@@ -1440,45 +1468,83 @@ defmodule CortexWeb.RunDetailLive do
           <% gossip_info = parse_gossip_info(@run) %>
           <%= if gossip_info do %>
             <div class="bg-gray-900 rounded-lg border border-purple-900/50 p-4 mb-6">
-              <h2 class="text-sm font-medium text-purple-400 uppercase tracking-wider mb-3">Gossip Protocol</h2>
-              <div class="grid grid-cols-4 gap-4 text-sm">
-                <div>
-                  <span class="text-gray-500">Topology</span>
-                  <p class="text-purple-300 font-medium">{gossip_info.topology}</p>
-                </div>
-                <div>
-                  <span class="text-gray-500">Rounds</span>
+              <h2 class="text-sm font-medium text-purple-400 uppercase tracking-wider mb-3">Knowledge Exchange</h2>
+              <!-- How it works -->
+              <p class="text-sm text-gray-400 mb-4">
+                {topology_description(gossip_info.topology, length(@team_runs))}
+                — {gossip_info.rounds} rounds, {gossip_info.exchange_interval}s apart.
+              </p>
+              <!-- Progress -->
+              <div class="flex items-center gap-4 mb-4">
+                <div class="flex-1">
                   <%= if @gossip_round do %>
-                    <p class="text-purple-300 font-medium">
-                      {if @gossip_round.current >= @gossip_round.total, do: "Done", else: "#{@gossip_round.current}/#{@gossip_round.total}"}
-                    </p>
-                    <!-- Progress bar -->
-                    <div class="mt-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                    <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
+                      <span>Round {@gossip_round.current} of {@gossip_round.total}</span>
+                      <span class={if @gossip_round.current >= @gossip_round.total, do: "text-green-400", else: "text-purple-400"}>
+                        {cond do
+                          @gossip_round.current >= @gossip_round.total -> "Complete"
+                          true -> "Exchanging"
+                        end}
+                      </span>
+                    </div>
+                    <div class="h-2 bg-gray-800 rounded-full overflow-hidden">
                       <div
                         class="h-full bg-purple-500 rounded-full transition-all duration-500"
                         style={"width: #{min(round(@gossip_round.current / max(@gossip_round.total, 1) * 100), 100)}%"}
                       />
                     </div>
                   <% else %>
-                    <p class="text-purple-300 font-medium">{gossip_info.rounds} total</p>
+                    <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
+                      <span>{gossip_info.rounds} rounds configured</span>
+                      <span class={if @run.status == "completed", do: "text-green-400", else: "text-gray-500"}>
+                        {if @run.status == "completed", do: "Complete", else: "Waiting"}
+                      </span>
+                    </div>
+                    <div class="h-2 bg-gray-800 rounded-full overflow-hidden">
+                      <div
+                        class={"h-full bg-#{if @run.status == "completed", do: "green", else: "gray"}-600 rounded-full"}
+                        style={"width: #{if @run.status == "completed", do: "100", else: "0"}%"}
+                      />
+                    </div>
                   <% end %>
                 </div>
-                <div>
-                  <span class="text-gray-500">Exchange Interval</span>
-                  <p class="text-purple-300 font-medium">{gossip_info.exchange_interval}s</p>
-                </div>
-                <div>
-                  <span class="text-gray-500">Status</span>
-                  <p class={["font-medium", if(@gossip_round && @gossip_round.current >= @gossip_round.total, do: "text-green-300", else: "text-purple-300")]}>
-                    {cond do
-                      @gossip_round && @gossip_round.current >= @gossip_round.total -> "Wrapping up"
-                      @gossip_round -> "Exchanging"
-                      @run.status == "completed" -> "Complete"
-                      true -> "Waiting"
-                    end}
-                  </p>
-                </div>
               </div>
+              <!-- Knowledge Results -->
+              <%= if @gossip_knowledge do %>
+                <div class="border-t border-purple-900/30 pt-4">
+                  <div class="flex items-center gap-3 mb-3">
+                    <h3 class="text-xs font-medium text-purple-400 uppercase tracking-wider">Knowledge Discovered</h3>
+                    <span class="text-xs text-gray-500">{@gossip_knowledge.total_entries} entries across {map_size(@gossip_knowledge.by_topic)} topics</span>
+                  </div>
+                  <!-- Topics -->
+                  <div class="flex flex-wrap gap-2 mb-3">
+                    <span
+                      :for={{topic, count} <- Enum.sort_by(@gossip_knowledge.by_topic, fn {_t, c} -> -c end)}
+                      class="bg-purple-900/30 text-purple-300 text-xs px-2 py-1 rounded"
+                    >
+                      {topic} <span class="text-purple-500">({count})</span>
+                    </span>
+                  </div>
+                  <!-- Top Entries -->
+                  <%= if @gossip_knowledge.top_entries != [] do %>
+                    <div class="space-y-2 max-h-48 overflow-y-auto">
+                      <div
+                        :for={entry <- @gossip_knowledge.top_entries}
+                        class="bg-gray-950 rounded p-2"
+                      >
+                        <div class="flex items-center gap-2 mb-1">
+                          <span class="text-purple-300 text-xs font-medium">{entry.topic}</span>
+                          <span class="text-gray-600 text-xs">from {entry.source}</span>
+                          <span class={["text-xs ml-auto", confidence_label_class(entry.confidence)]}>
+                            {confidence_label(entry.confidence)}
+                          </span>
+                        </div>
+                        <p class="text-gray-400 text-xs">{truncate(entry.content, 150)}</p>
+                      </div>
+                    </div>
+                  <% end %>
+                </div>
+              <% end %>
             </div>
           <% end %>
 
@@ -2579,7 +2645,10 @@ defmodule CortexWeb.RunDetailLive do
 
         {:noreply,
          socket
-         |> assign(activities: prepend_activity(socket.assigns.activities, entry))
+         |> assign(
+           coordinator_alive: true,
+           activities: prepend_activity(socket.assigns.activities, entry)
+         )
          |> put_flash(:info, "Gossip coordinator agent started")}
 
       {:error, _errors} ->
@@ -3234,6 +3303,26 @@ defmodule CortexWeb.RunDetailLive do
   defp participant_label(run, :singular), do: if(gossip?(run), do: "node", else: "team")
   defp participant_label(run, :plural), do: if(gossip?(run), do: "Nodes", else: "Teams")
   defp participant_label(run, :lower_plural), do: if(gossip?(run), do: "nodes", else: "teams")
+
+  defp topology_description("full_mesh", count),
+    do: "Every node shares knowledge with all #{count - 1} others each round"
+
+  defp topology_description("ring", _count),
+    do: "Each node shares knowledge with its two neighbors"
+
+  defp topology_description("random", _count),
+    do: "Each node shares knowledge with 2 random peers per round"
+
+  defp topology_description(other, _count),
+    do: "Nodes exchange knowledge via #{other} topology"
+
+  defp confidence_label(c) when c >= 0.8, do: "high confidence"
+  defp confidence_label(c) when c >= 0.5, do: "medium confidence"
+  defp confidence_label(_), do: "low confidence"
+
+  defp confidence_label_class(c) when c >= 0.8, do: "text-green-400"
+  defp confidence_label_class(c) when c >= 0.5, do: "text-yellow-400"
+  defp confidence_label_class(_), do: "text-red-400"
 
   defp parse_gossip_info(run) do
     if run.config_yaml do

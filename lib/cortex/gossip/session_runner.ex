@@ -186,7 +186,13 @@ defmodule Cortex.Gossip.SessionRunner do
       broadcast(:gossip_completed, %{
         project: config.name,
         duration_ms: run_duration,
-        entries: length(all_entries)
+        total_entries: length(all_entries),
+        by_topic: group_entries_by_topic(all_entries),
+        top_entries:
+          all_entries
+          |> Enum.sort_by(& &1.confidence, :desc)
+          |> Enum.take(10)
+          |> Enum.map(&entry_to_map/1)
       })
 
       Tel.emit_run_completed(%{
