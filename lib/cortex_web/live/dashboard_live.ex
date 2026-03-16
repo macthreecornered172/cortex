@@ -93,7 +93,7 @@ defmodule CortexWeb.DashboardLive do
             <tr class="border-b border-gray-800">
               <th class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">Name</th>
               <th class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">Status</th>
-              <th class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">Teams</th>
+              <th class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">Participants</th>
               <th class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">Tokens</th>
               <th class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">Duration</th>
               <th class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">Started</th>

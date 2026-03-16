@@ -801,12 +801,13 @@ defmodule CortexWeb.GossipLive do
       File.write!(tmp_path, yaml)
 
       try do
-        {:ok, _summary} =
+        {:ok, summary} =
           SessionRunner.run_config(config,
-            workspace_path: workspace_path
+            workspace_path: workspace_path,
+            run_id: run_id
           )
 
-        safe_update_run_status(run, "completed")
+        safe_update_run_complete(run, summary)
       rescue
         e ->
           safe_update_run_status(run, "failed")
@@ -816,6 +817,25 @@ defmodule CortexWeb.GossipLive do
         File.rm(tmp_path)
       end
     end)
+  end
+
+  defp safe_update_run_complete(run, summary) do
+    case Cortex.Store.get_run(run.id) do
+      nil ->
+        :ok
+
+      fresh ->
+        Cortex.Store.update_run(fresh, %{
+          status: "completed",
+          completed_at: DateTime.utc_now(),
+          total_cost_usd: Map.get(summary, :total_cost, 0.0),
+          total_input_tokens: Map.get(summary, :total_input_tokens, 0),
+          total_output_tokens: Map.get(summary, :total_output_tokens, 0),
+          total_duration_ms: Map.get(summary, :total_duration_ms, 0)
+        })
+    end
+  rescue
+    _ -> :ok
   end
 
   defp safe_update_run_status(run, status) do

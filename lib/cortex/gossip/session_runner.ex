@@ -115,6 +115,7 @@ defmodule Cortex.Gossip.SessionRunner do
   defp execute(config, opts) do
     workspace_path = Keyword.get(opts, :workspace_path, ".")
     command = Keyword.get(opts, :command, "claude")
+    run_id = Keyword.get(opts, :run_id)
 
     agent_names = Enum.map(config.agents, & &1.name)
 
@@ -130,6 +131,9 @@ defmodule Cortex.Gossip.SessionRunner do
 
       # Step 4: Write seed knowledge to files for agents to read
       write_seed_files(workspace_path, config)
+
+      # Step 4b: Create TeamRun records so the UI can track agents
+      create_team_run_records(run_id, config, workspace_path)
 
       broadcast(:gossip_started, %{project: config.name, agents: agent_names})
       Tel.emit_run_started(%{project: config.name, teams: agent_names, mode: :gossip})
@@ -157,6 +161,9 @@ defmodule Cortex.Gossip.SessionRunner do
 
       # Step 10: Collect merged knowledge
       all_entries = collect_all_entries(stores)
+
+      # Step 10b: Update TeamRun records with final results
+      update_team_run_records(run_id, results)
 
       broadcast(:gossip_completed, %{
         project: config.name,
@@ -213,6 +220,65 @@ defmodule Cortex.Gossip.SessionRunner do
 
       File.write!(seed_path, Jason.encode!(seed_json, pretty: true))
     end)
+  end
+
+  # -- TeamRun Persistence (so the LiveView UI can track gossip agents) --------
+
+  @spec create_team_run_records(String.t() | nil, GossipConfig.t(), String.t()) :: :ok
+  defp create_team_run_records(nil, _config, _workspace_path), do: :ok
+
+  defp create_team_run_records(run_id, config, workspace_path) do
+    Enum.each(config.agents, fn agent ->
+      log_path = Path.join([workspace_path, ".cortex", "logs", "#{agent.name}.log"])
+
+      Cortex.Store.create_team_run(%{
+        run_id: run_id,
+        team_name: agent.name,
+        role: agent.topic,
+        status: "running",
+        tier: nil,
+        prompt: agent.prompt,
+        log_path: log_path,
+        started_at: DateTime.utc_now()
+      })
+    end)
+  rescue
+    _ -> :ok
+  end
+
+  @spec update_team_run_records(String.t() | nil, list()) :: :ok
+  defp update_team_run_records(nil, _results), do: :ok
+
+  defp update_team_run_records(run_id, results) do
+    Enum.each(results, fn {name, status, data} ->
+      db_status = if status == :ok, do: "completed", else: "failed"
+
+      attrs =
+        case data do
+          %{result: result} ->
+            %{
+              status: db_status,
+              cost_usd: result.cost_usd,
+              input_tokens: result.input_tokens,
+              output_tokens: result.output_tokens,
+              duration_ms: result.duration_ms,
+              num_turns: result.num_turns,
+              session_id: result.session_id,
+              result_summary: truncate(result.result, 2000),
+              completed_at: DateTime.utc_now()
+            }
+
+          _ ->
+            %{status: db_status, completed_at: DateTime.utc_now()}
+        end
+
+      case Cortex.Store.get_team_run(run_id, name) do
+        nil -> :ok
+        team_run -> Cortex.Store.update_team_run(team_run, attrs)
+      end
+    end)
+  rescue
+    _ -> :ok
   end
 
   # -- KnowledgeStore Management -----------------------------------------------
@@ -318,6 +384,8 @@ defmodule Cortex.Gossip.SessionRunner do
 
     cluster_section = build_cluster_section(config.cluster_context, config)
 
+    poll_interval = inbox_poll_interval(config.gossip.exchange_interval_seconds)
+
     """
     You are an exploration agent in a multi-agent gossip system.
 
@@ -351,18 +419,22 @@ defmodule Cortex.Gossip.SessionRunner do
       #{inbox_path}
 
     Set up a loop to check for new knowledge from other agents:
-    /loop 2m cat #{inbox_path}
+    /loop #{poll_interval} cat #{inbox_path}
 
     When you see new entries, read them and use them to deepen your exploration.
     Don't just repeat what others found — build on it, find new angles, go deeper.
     #{seed_section}
     ## Instructions
 
-    1. Set up your inbox loop: /loop 2m cat #{inbox_path}
+    1. Set up your inbox loop: /loop #{poll_interval} cat #{inbox_path}
     2. Explore your topic thoroughly
     3. Record each discrete finding in findings.json (update frequently)
     4. When inbox delivers knowledge from other agents, use it to guide your exploration
-    5. When done, provide a final summary of all your findings
+    5. You are part of a #{config.gossip.rounds}-round gossip session. Do NOT finish early.
+       Keep exploring and refining your findings until you have received and incorporated
+       at least #{max(config.gossip.rounds - 1, 1)} round(s) of peer knowledge from your inbox.
+       After incorporating peer knowledge, update your findings.json with improved/new entries.
+    6. When done, provide a final summary of all your findings
     """
   end
 
@@ -396,6 +468,19 @@ defmodule Cortex.Gossip.SessionRunner do
       end)
 
     "\n## Starting Knowledge\n\n#{Enum.join(entries, "\n")}\n"
+  end
+
+  # Poll at half the exchange interval so agents catch new knowledge before
+  # the next gossip round. Clamp to a minimum of 10s.
+  @spec inbox_poll_interval(pos_integer()) :: String.t()
+  defp inbox_poll_interval(exchange_interval_seconds) do
+    poll_seconds = max(div(exchange_interval_seconds, 2), 10)
+
+    cond do
+      poll_seconds < 60 -> "#{poll_seconds}s"
+      rem(poll_seconds, 60) == 0 -> "#{div(poll_seconds, 60)}m"
+      true -> "#{poll_seconds}s"
+    end
   end
 
   # -- Exchange Loop -----------------------------------------------------------

@@ -1,0 +1,36 @@
+name: "gossip-simple"
+mode: gossip
+
+cluster_context: |
+  You're part of a small team brainstorming names for a new coffee shop
+  that roasts its own beans and has a cozy library vibe. Share your best
+  ideas — build on what others suggest.
+
+defaults:
+  model: haiku
+  max_turns: 50
+  timeout_minutes: 5
+
+gossip:
+  rounds: 3
+  topology: full_mesh
+  exchange_interval_seconds: 30
+
+agents:
+  - name: branding
+    topic: "shop names"
+    prompt: |
+      Brainstorm 5 creative names for a coffee shop that roasts its own beans
+      and has a cozy library atmosphere. For each name, give a one-line rationale.
+      If you receive ideas from peers, riff on them — combine, remix, improve.
+
+  - name: vibes
+    topic: "shop names"
+    prompt: |
+      Brainstorm 5 creative names for a coffee-and-books shop. Focus on names
+      that evoke warmth, curiosity, and the smell of fresh roast. One-line
+      rationale each. Build on any peer ideas you receive.
+
+seed_knowledge:
+  - topic: "context"
+    content: "The shop is in a college town. Target audience: students, professors, remote workers. Open 6am-10pm."

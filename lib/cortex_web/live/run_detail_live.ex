@@ -929,9 +929,9 @@ defmodule CortexWeb.RunDetailLive do
         <div class="bg-yellow-900/30 border border-yellow-800 rounded-lg p-4 mb-6">
           <div class="flex items-center justify-between mb-2">
             <div>
-              <p class="text-yellow-300 font-medium">Stalled teams detected</p>
+              <p class="text-yellow-300 font-medium">Stalled {participant_label(@run, :lower_plural)} detected</p>
               <p class="text-yellow-200/70 text-sm">
-                {count_stalled(@team_runs, @last_seen, @pid_status)} team(s) show as "running" but have no live PID and no events in over 5 minutes:
+                {count_stalled(@team_runs, @last_seen, @pid_status)} {participant_label(@run, :singular)}(s) show as "running" but have no live PID and no events in over 5 minutes:
                 <span class="font-mono">
                   {stalled_team_names(@team_runs, @last_seen, @pid_status) |> Enum.join(", ")}
                 </span>
@@ -965,7 +965,7 @@ defmodule CortexWeb.RunDetailLive do
         <div class="bg-blue-900/30 border border-blue-800 rounded-lg p-4 mb-6">
           <div class="flex items-center justify-between">
             <div>
-              <p class="text-blue-300 font-medium">Run interrupted — {length(incomplete)} incomplete team(s)</p>
+              <p class="text-blue-300 font-medium">Run interrupted — {length(incomplete)} incomplete {participant_label(@run, :singular)}(s)</p>
               <p class="text-blue-200/70 text-sm">
                 The coordinator process died before all tiers completed.
                 Remaining: <span class="font-mono">{Enum.join(incomplete, ", ")}</span>
@@ -1165,56 +1165,109 @@ defmodule CortexWeb.RunDetailLive do
           <% end %>
         </div>
 
-        <!-- DAG Visualization -->
-        <%= if @tiers != [] do %>
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
-            <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Dependency Graph</h2>
-            <.dag_graph
-              tiers={@tiers}
-              teams={@team_runs}
-              edges={@edges}
-              run_id={@run.id}
-            />
-          </div>
-        <% end %>
-
-        <!-- Team Cards -->
-        <h2 class="text-lg font-semibold text-white mb-4">Teams</h2>
-        <%= if @team_runs == [] do %>
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
-            <p class="text-gray-400">No teams recorded for this run.</p>
-          </div>
-        <% else %>
-          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            <a
-              :for={team <- @team_runs}
-              href={"/runs/#{@run.id}/teams/#{team.team_name}"}
-              class="bg-gray-900 rounded-lg border border-gray-800 p-4 hover:border-gray-600 transition-colors block"
-            >
-              <div class="flex items-center justify-between mb-2">
-                <h3 class="font-medium text-white">{team.team_name}</h3>
-                <.status_badge status={display_status(team, @last_seen, @pid_status)} />
-              </div>
-              <p :if={team.role} class="text-sm text-gray-400 mb-2">{team.role}</p>
-              <%= if members = Map.get(@team_members, team.team_name, []) do %>
-                <div :if={members != []} class="mb-2">
-                  <div class="flex flex-wrap gap-1">
-                    <span
-                      :for={member <- members}
-                      class="inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-400"
-                    >
-                      {member}
-                    </span>
-                  </div>
+        <%= if is_gossip?(@run) do %>
+          <!-- Gossip Info -->
+          <% gossip_info = parse_gossip_info(@run) %>
+          <%= if gossip_info do %>
+            <div class="bg-gray-900 rounded-lg border border-purple-900/50 p-4 mb-6">
+              <h2 class="text-sm font-medium text-purple-400 uppercase tracking-wider mb-3">Gossip Protocol</h2>
+              <div class="grid grid-cols-3 gap-4 text-sm">
+                <div>
+                  <span class="text-gray-500">Topology</span>
+                  <p class="text-purple-300 font-medium">{gossip_info.topology}</p>
                 </div>
-              <% end %>
-              <div class="flex items-center gap-4 text-sm">
-                <span class="text-gray-500">Tier {team.tier || 0}</span>
-                <.token_display input={total_input(team)} output={team.output_tokens} />
-                <.duration_display ms={team.duration_ms} />
+                <div>
+                  <span class="text-gray-500">Rounds</span>
+                  <p class="text-purple-300 font-medium">{gossip_info.rounds}</p>
+                </div>
+                <div>
+                  <span class="text-gray-500">Exchange Interval</span>
+                  <p class="text-purple-300 font-medium">{gossip_info.exchange_interval}s</p>
+                </div>
               </div>
-            </a>
-          </div>
+            </div>
+          <% end %>
+
+          <!-- Node Cards -->
+          <h2 class="text-lg font-semibold text-white mb-4">Nodes</h2>
+          <%= if @team_runs == [] do %>
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
+              <p class="text-gray-400">No nodes recorded for this run.</p>
+            </div>
+          <% else %>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <a
+                :for={team <- @team_runs}
+                href={"/runs/#{@run.id}/teams/#{team.team_name}"}
+                class="bg-gray-900 rounded-lg border border-purple-900/30 p-4 hover:border-purple-700/50 transition-colors block"
+              >
+                <div class="flex items-center justify-between mb-2">
+                  <div class="flex items-center gap-2">
+                    <span class={["text-xs", if(team.status == "completed", do: "text-green-400", else: if(team.status == "running", do: "text-blue-400 animate-pulse", else: "text-gray-600"))]}>&bull;</span>
+                    <h3 class="font-medium text-white">{team.team_name}</h3>
+                  </div>
+                  <.status_badge status={display_status(team, @last_seen, @pid_status)} />
+                </div>
+                <p :if={team.role} class="text-sm text-purple-300/70 mb-2">topic: {team.role}</p>
+                <div class="flex items-center gap-4 text-sm">
+                  <.token_display input={total_input(team)} output={team.output_tokens} />
+                  <.duration_display ms={team.duration_ms} />
+                </div>
+              </a>
+            </div>
+          <% end %>
+        <% else %>
+          <!-- DAG Visualization -->
+          <%= if @tiers != [] do %>
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
+              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Dependency Graph</h2>
+              <.dag_graph
+                tiers={@tiers}
+                teams={@team_runs}
+                edges={@edges}
+                run_id={@run.id}
+              />
+            </div>
+          <% end %>
+
+          <!-- Team Cards -->
+          <h2 class="text-lg font-semibold text-white mb-4">Teams</h2>
+          <%= if @team_runs == [] do %>
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
+              <p class="text-gray-400">No teams recorded for this run.</p>
+            </div>
+          <% else %>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <a
+                :for={team <- @team_runs}
+                href={"/runs/#{@run.id}/teams/#{team.team_name}"}
+                class="bg-gray-900 rounded-lg border border-gray-800 p-4 hover:border-gray-600 transition-colors block"
+              >
+                <div class="flex items-center justify-between mb-2">
+                  <h3 class="font-medium text-white">{team.team_name}</h3>
+                  <.status_badge status={display_status(team, @last_seen, @pid_status)} />
+                </div>
+                <p :if={team.role} class="text-sm text-gray-400 mb-2">{team.role}</p>
+                <%= if members = Map.get(@team_members, team.team_name, []) do %>
+                  <div :if={members != []} class="mb-2">
+                    <div class="flex flex-wrap gap-1">
+                      <span
+                        :for={member <- members}
+                        class="inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-400"
+                      >
+                        {member}
+                      </span>
+                    </div>
+                  </div>
+                <% end %>
+                <div class="flex items-center gap-4 text-sm">
+                  <span class="text-gray-500">Tier {team.tier || 0}</span>
+                  <.token_display input={total_input(team)} output={team.output_tokens} />
+                  <.duration_display ms={team.duration_ms} />
+                </div>
+              </a>
+            </div>
+          <% end %>
         <% end %>
 
         <!-- Activity Feed (all teams, no filter) -->
@@ -1262,7 +1315,7 @@ defmodule CortexWeb.RunDetailLive do
                 name="team"
                 class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
               >
-                <option value="">All teams</option>
+                <option value="">All {participant_label(@run, :lower_plural)}</option>
                 <option :for={name <- @team_names} value={name} selected={name == @activity_team}>
                   {name}
                 </option>
@@ -1312,7 +1365,7 @@ defmodule CortexWeb.RunDetailLive do
                       name="team"
                       class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
                     >
-                      <option value="">Select team...</option>
+                      <option value="">Select {participant_label(@run, :singular)}...</option>
                       <option :for={name <- @team_names} value={name} selected={name == @messages_team}>
                         {name}
                       </option>
@@ -1379,7 +1432,7 @@ defmodule CortexWeb.RunDetailLive do
                     name="to"
                     class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
                   >
-                    <option value="">Select team...</option>
+                    <option value="">Select {participant_label(@run, :singular)}...</option>
                     <option :for={name <- @team_names} value={name} selected={name == @msg_to}>
                       {name}
                     </option>
@@ -1416,14 +1469,14 @@ defmodule CortexWeb.RunDetailLive do
           <!-- Team Selector + Refresh -->
           <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4">
             <div class="flex items-center gap-3">
-              <label class="text-sm text-gray-400 shrink-0">Team:</label>
+              <label class="text-sm text-gray-400 shrink-0">{String.capitalize(participant_label(@run, :singular))}:</label>
               <form phx-change="select_log_team" class="flex-1">
                 <select
                   name="team"
                   class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
                 >
-                  <option value="">Select team...</option>
-                  <option value="__all__" selected={@selected_log_team == "__all__"}>All teams</option>
+                  <option value="">Select {participant_label(@run, :singular)}...</option>
+                  <option value="__all__" selected={@selected_log_team == "__all__"}>All {participant_label(@run, :lower_plural)}</option>
                   <option value="coordinator" selected={@selected_log_team == "coordinator"}>coordinator</option>
                   <option :for={name <- @team_names} value={name} selected={name == @selected_log_team}>
                     {name}
@@ -1452,7 +1505,7 @@ defmodule CortexWeb.RunDetailLive do
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
               <div class="flex items-center justify-between mb-3">
                 <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">
-                  {if @selected_log_team == "__all__", do: "All teams", else: "#{@selected_log_team}.log"}
+                  {if @selected_log_team == "__all__", do: "All #{participant_label(@run, :lower_plural)}", else: "#{@selected_log_team}.log"}
                 </h2>
                 <span :if={@log_lines} class="text-xs text-gray-600">
                   {length(@log_lines)} lines (last 500)
@@ -1520,7 +1573,7 @@ defmodule CortexWeb.RunDetailLive do
             </div>
           <% else %>
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
-              <p class="text-gray-500 text-sm">Select a team to view its log.</p>
+              <p class="text-gray-500 text-sm">Select a {participant_label(@run, :singular)} to view its log.</p>
             </div>
           <% end %>
         <% else %>
@@ -1542,7 +1595,7 @@ defmodule CortexWeb.RunDetailLive do
                   name="team"
                   class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
                 >
-                  <option value="">Select team...</option>
+                  <option value="">Select {participant_label(@run, :singular)}...</option>
                   <option :for={name <- @team_names} value={name} selected={name == @diagnostics_team}>
                     {name}
                   </option>
@@ -1679,7 +1732,7 @@ defmodule CortexWeb.RunDetailLive do
             </div>
           <% else %>
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
-              <p class="text-gray-500 text-sm">Select a team to view diagnostics.</p>
+              <p class="text-gray-500 text-sm">Select a {participant_label(@run, :singular)} to view diagnostics.</p>
             </div>
           <% end %>
         <% else %>
@@ -1737,12 +1790,12 @@ defmodule CortexWeb.RunDetailLive do
             <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Execution</h2>
             <dl class="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3">
               <div>
-                <dt class="text-xs text-gray-500">Teams</dt>
+                <dt class="text-xs text-gray-500">{participant_label(@run, :plural)}</dt>
                 <dd class="text-sm text-gray-200">{length(@team_runs)}</dd>
               </div>
               <div>
-                <dt class="text-xs text-gray-500">Tiers</dt>
-                <dd class="text-sm text-gray-200">{length(@tiers)}</dd>
+                <dt class="text-xs text-gray-500">{if is_gossip?(@run), do: "Rounds", else: "Tiers"}</dt>
+                <dd class="text-sm text-gray-200">{if is_gossip?(@run), do: (parse_gossip_info(@run) || %{rounds: 0}).rounds, else: length(@tiers)}</dd>
               </div>
               <div>
                 <dt class="text-xs text-gray-500">Tokens</dt>
@@ -1785,7 +1838,7 @@ defmodule CortexWeb.RunDetailLive do
 
             <!-- Team Summary Table -->
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Teams</h2>
+              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">{participant_label(@run, :plural)}</h2>
               <div class="overflow-x-auto">
                 <table class="w-full">
                   <thead>
@@ -2589,6 +2642,33 @@ defmodule CortexWeb.RunDetailLive do
       config
     else
       _ -> nil
+    end
+  end
+
+  defp is_gossip?(run), do: run.mode == "gossip"
+
+  # Terminology: gossip has "nodes", workflows have "teams"
+  defp participant_label(run, :singular), do: if(is_gossip?(run), do: "node", else: "team")
+  defp participant_label(run, :plural), do: if(is_gossip?(run), do: "Nodes", else: "Teams")
+  defp participant_label(run, :lower_plural), do: if(is_gossip?(run), do: "nodes", else: "teams")
+
+  defp parse_gossip_info(run) do
+    if run.config_yaml do
+      case YamlElixir.read_from_string(run.config_yaml) do
+        {:ok, raw} ->
+          gossip = Map.get(raw, "gossip", %{})
+
+          %{
+            topology: Map.get(gossip, "topology", "random"),
+            rounds: Map.get(gossip, "rounds", 5),
+            exchange_interval: Map.get(gossip, "exchange_interval_seconds", 60)
+          }
+
+        _ ->
+          nil
+      end
+    else
+      nil
     end
   end
 
