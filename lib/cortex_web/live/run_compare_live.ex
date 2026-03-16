@@ -57,7 +57,7 @@ defmodule CortexWeb.RunCompareLive do
     ~H"""
     <.header>
       Run Comparison
-      <:subtitle>Token usage and cost across completed runs</:subtitle>
+      <:subtitle>Token usage across completed runs</:subtitle>
       <:actions>
         <button
           phx-click="refresh"
@@ -106,7 +106,6 @@ defmodule CortexWeb.RunCompareLive do
               <td class="px-3 py-2.5 text-sm font-mono text-gray-300">{fmt_tokens(run.total_output_tokens)}</td>
               <td class="px-3 py-2.5 text-sm font-mono text-gray-300">{fmt_tokens(run.total_cache_read_tokens)}</td>
               <td class="px-3 py-2.5 text-sm font-mono text-gray-300">{fmt_tokens(run.total_cache_creation_tokens)}</td>
-              <td class="px-3 py-2.5 text-sm font-mono text-gray-300">{fmt_cost(run.total_cost_usd)}</td>
               <td class="px-3 py-2.5 text-sm font-mono text-gray-300">{fmt_duration(run.total_duration_ms)}</td>
               <td class="px-3 py-2.5 text-sm text-gray-400">{fmt_time(run.started_at || run.inserted_at)}</td>
             </tr>
@@ -118,7 +117,6 @@ defmodule CortexWeb.RunCompareLive do
               <td class="px-3 py-2.5 text-sm font-mono text-white">{fmt_tokens(sum_field(@runs, :total_output_tokens))}</td>
               <td class="px-3 py-2.5 text-sm font-mono text-white">{fmt_tokens(sum_field(@runs, :total_cache_read_tokens))}</td>
               <td class="px-3 py-2.5 text-sm font-mono text-white">{fmt_tokens(sum_field(@runs, :total_cache_creation_tokens))}</td>
-              <td class="px-3 py-2.5 text-sm font-mono text-white">{fmt_cost(sum_float_field(@runs, :total_cost_usd))}</td>
               <td class="px-3 py-2.5 text-sm font-mono text-white">{fmt_duration(sum_field(@runs, :total_duration_ms))}</td>
               <td class="px-3 py-2.5"></td>
             </tr>
@@ -139,7 +137,6 @@ defmodule CortexWeb.RunCompareLive do
       {"total_output_tokens", "Output"},
       {"total_cache_read_tokens", "Cache Read"},
       {"total_cache_creation_tokens", "Cache Create"},
-      {"total_cost_usd", "Cost"},
       {"total_duration_ms", "Duration"},
       {"started_at", "Started"}
     ]
@@ -186,19 +183,12 @@ defmodule CortexWeb.RunCompareLive do
     runs |> Enum.map(&(Map.get(&1, field) || 0)) |> Enum.sum()
   end
 
-  defp sum_float_field(runs, field) do
-    runs |> Enum.map(&(Map.get(&1, field) || 0.0)) |> Enum.sum()
-  end
-
   defp fmt_tokens(nil), do: "0"
   defp fmt_tokens(0), do: "0"
   defp fmt_tokens(n) when n >= 1_000_000, do: "#{Float.round(n / 1_000_000, 1)}M"
   defp fmt_tokens(n) when n >= 1_000, do: "#{Float.round(n / 1_000, 1)}K"
   defp fmt_tokens(n), do: to_string(n)
 
-  defp fmt_cost(nil), do: "--"
-  defp fmt_cost(n) when is_number(n), do: "$#{:erlang.float_to_binary(n / 1, decimals: 4)}"
-  defp fmt_cost(_), do: "--"
 
   defp fmt_duration(nil), do: "--"
   defp fmt_duration(ms) when ms < 1_000, do: "#{ms}ms"

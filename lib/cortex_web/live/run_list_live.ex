@@ -224,7 +224,6 @@ defmodule CortexWeb.RunListLive do
                 output={run.total_output_tokens}
                 cache_read={run.total_cache_read_tokens}
                 cache_creation={run.total_cache_creation_tokens}
-                cost={run.total_cost_usd}
               /></td>
               <td class="px-4 py-3"><.duration_display ms={run.total_duration_ms} /></td>
               <td class="px-4 py-3 text-sm text-gray-400">{format_time(run.started_at || run.inserted_at)}</td>

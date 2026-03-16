@@ -10,6 +10,7 @@ defmodule CortexWeb.RunDetailLive do
   alias Cortex.Orchestration.LogParser
   alias Cortex.Orchestration.Runner
   alias Cortex.Orchestration.Spawner
+  alias Cortex.Orchestration.SummaryAgent
   alias Cortex.Orchestration.Workspace
 
   @max_activities 150
@@ -54,6 +55,7 @@ defmodule CortexWeb.RunDetailLive do
            coordinator_summaries: [],
            selected_summary: nil,
            run_summary: nil,
+           summary_loading: false,
            pid_status: %{},
            editing_name: false,
            name_form: %{"name" => ""},
@@ -100,6 +102,7 @@ defmodule CortexWeb.RunDetailLive do
            coordinator_summaries: [],
            selected_summary: nil,
            run_summary: nil,
+           summary_loading: false,
            pid_status: %{},
            editing_name: false,
            name_form: %{"name" => run.name || ""},
@@ -344,6 +347,44 @@ defmodule CortexWeb.RunDetailLive do
   def handle_info(:tick_elapsed, socket) do
     # Just triggers a re-render so elapsed_since/1 shows updated time
     {:noreply, socket}
+  end
+
+  def handle_info({:ai_summary_result, {:ok, summary}}, socket) do
+    summaries = read_coordinator_summaries(socket.assigns.run)
+
+    entry = %{
+      team: "system",
+      text: "AI summary complete",
+      kind: :message,
+      at: format_now()
+    }
+
+    {:noreply,
+     socket
+     |> assign(
+       summary_loading: false,
+       coordinator_summaries: summaries,
+       selected_summary: %{name: summary.filename || "latest", content: summary.content},
+       activities: prepend_activity(socket.assigns.activities, entry)
+     )
+     |> put_flash(:info, "AI summary ready")}
+  end
+
+  def handle_info({:ai_summary_result, {:error, reason}}, socket) do
+    entry = %{
+      team: "system",
+      text: "AI summary failed: #{inspect(reason)}",
+      kind: :error,
+      at: format_now()
+    }
+
+    {:noreply,
+     socket
+     |> assign(
+       summary_loading: false,
+       activities: prepend_activity(socket.assigns.activities, entry)
+     )
+     |> put_flash(:error, "AI summary failed: #{inspect(reason)}")}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -833,7 +874,7 @@ defmodule CortexWeb.RunDetailLive do
     {:noreply, assign(socket, coordinator_summaries: summaries)}
   end
 
-  def handle_event("request_coordinator_summary", _params, socket) do
+  def handle_event("request_ai_summary", _params, socket) do
     run = socket.assigns.run
     workspace_path = run && run.workspace_path
 
@@ -841,28 +882,31 @@ defmodule CortexWeb.RunDetailLive do
       not (run && workspace_path) ->
         {:noreply, put_flash(socket, :error, "No workspace path")}
 
-      not socket.assigns.coordinator_alive ->
-        {:noreply, put_flash(socket, :error, "Coordinator is not alive")}
+      socket.assigns.summary_loading ->
+        {:noreply, put_flash(socket, :info, "Summary already in progress...")}
 
       true ->
-        content =
-          "Please write a summary of current run state to .cortex/summaries/. " <>
-            "Include: what each agent has produced so far, key findings and themes, " <>
-            "convergence status, any issues detected, and recommendations."
+        liveview_pid = self()
 
-        Runner.send_message(workspace_path, "human", "coordinator", content)
+        Task.start(fn ->
+          result = SummaryAgent.generate(workspace_path, run_name: run.name || "Untitled")
+          send(liveview_pid, {:ai_summary_result, result})
+        end)
 
         entry = %{
           team: "system",
-          text: "Summary requested from coordinator",
+          text: "AI summary agent spawned (haiku)",
           kind: :message,
           at: format_now()
         }
 
         {:noreply,
          socket
-         |> assign(activities: prepend_activity(socket.assigns.activities, entry))
-         |> put_flash(:info, "Summary requested — coordinator will write it on next poll (~10s)")}
+         |> assign(
+           summary_loading: true,
+           activities: prepend_activity(socket.assigns.activities, entry)
+         )
+         |> put_flash(:info, "Generating AI summary...")}
     end
   end
 
@@ -923,7 +967,6 @@ defmodule CortexWeb.RunDetailLive do
               output={sum_team_field(@team_runs, :output_tokens)}
               cache_read={sum_team_field(@team_runs, :cache_read_tokens)}
               cache_creation={sum_team_field(@team_runs, :cache_creation_tokens)}
-              cost={@run.total_cost_usd}
             />
           </span>
           <span class="ml-2 text-gray-400">
@@ -1017,7 +1060,7 @@ defmodule CortexWeb.RunDetailLive do
       <!-- Tab Bar -->
       <div class="flex border-b border-gray-800 mb-6">
         <button
-          :for={tab <- ~w(overview activity messages logs diagnostics settings)}
+          :for={tab <- ~w(overview activity messages logs summaries diagnostics settings)}
           phx-click="switch_tab"
           phx-value-tab={tab}
           class={[
@@ -1131,69 +1174,6 @@ defmodule CortexWeb.RunDetailLive do
               <% end %>
             </div>
           </div>
-        </div>
-
-        <!-- Coordinator Summaries -->
-        <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
-          <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Coordinator Summaries</h2>
-            <div class="flex gap-2">
-              <button
-                :if={@coordinator_alive}
-                phx-click="request_coordinator_summary"
-                class="text-xs text-cortex-400 hover:text-cortex-300 px-2 py-1 rounded border border-cortex-700 hover:border-cortex-500"
-              >
-                Request Summary
-              </button>
-              <button
-                phx-click="refresh_summaries"
-                class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
-              >
-                Refresh
-              </button>
-            </div>
-          </div>
-          <%= if @coordinator_summaries != [] do %>
-            <div class="flex flex-wrap gap-2 mb-3">
-              <button
-                :for={file <- @coordinator_summaries}
-                phx-click="select_summary"
-                phx-value-file={file}
-                class={[
-                  "text-xs px-2 py-1 rounded border transition-colors",
-                  if(@selected_summary && @selected_summary.name == file,
-                    do: "border-cortex-500 text-cortex-300 bg-cortex-900/30",
-                    else: "border-gray-700 text-gray-400 hover:text-gray-300 hover:border-gray-500"
-                  )
-                ]}
-              >
-                {file}
-              </button>
-            </div>
-            <div :if={@selected_summary} class="bg-gray-950 rounded p-3">
-              <pre class="text-gray-300 text-sm font-mono whitespace-pre-wrap overflow-x-auto">{@selected_summary.content}</pre>
-            </div>
-          <% else %>
-            <p class="text-gray-500 text-sm">{if @coordinator_alive, do: "No summaries yet — click Request Summary.", else: "No summaries. Start the coordinator to generate them."}</p>
-          <% end %>
-        </div>
-
-        <!-- On-demand Run Summary -->
-        <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
-          <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Run Summary</h2>
-            <button
-              phx-click="generate_summary"
-              class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
-            >
-              {if @run_summary, do: "Refresh", else: "Generate"}
-            </button>
-          </div>
-          <%= if @run_summary do %>
-            <pre class="text-gray-300 text-sm font-mono whitespace-pre overflow-x-auto bg-gray-950 rounded p-3">{@run_summary}</pre>
-          <% else %>
-            <p class="text-gray-500 text-sm">Click Generate to build a summary of current run state.</p>
-          <% end %>
         </div>
 
         <%= if gossip?(@run) do %>
@@ -1397,6 +1377,7 @@ defmodule CortexWeb.RunDetailLive do
                       class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
                     >
                       <option value="">Select {participant_label(@run, :singular)}...</option>
+                      <option value="coordinator" selected={@messages_team == "coordinator"}>coordinator</option>
                       <option :for={name <- @team_names} value={name} selected={name == @messages_team}>
                         {name}
                       </option>
@@ -1595,6 +1576,88 @@ defmodule CortexWeb.RunDetailLive do
         <% end %>
       </div>
 
+      <!-- ============ Summaries Tab ============ -->
+      <div :if={@current_tab == "summaries"}>
+        <div class="space-y-6">
+          <!-- Generate buttons -->
+          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+            <div class="flex items-center gap-4">
+              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Generate</h2>
+              <button
+                :if={@run && @run.workspace_path}
+                phx-click="request_ai_summary"
+                disabled={@summary_loading}
+                class={[
+                  "rounded px-4 py-2 text-sm font-medium transition-colors",
+                  if(@summary_loading,
+                    do: "bg-gray-700 text-gray-400 cursor-wait",
+                    else: "bg-cortex-600 text-white hover:bg-cortex-500"
+                  )
+                ]}
+              >
+                {if @summary_loading, do: "Generating AI Summary...", else: "Generate AI Summary"}
+              </button>
+              <button
+                phx-click="generate_summary"
+                class="rounded px-4 py-2 text-sm font-medium bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors"
+              >
+                Generate DB Summary
+              </button>
+              <button
+                phx-click="refresh_summaries"
+                class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500 ml-auto"
+              >
+                Reload from disk
+              </button>
+            </div>
+            <p class="text-xs text-gray-500 mt-2">
+              AI Summary spawns a haiku agent to analyze workspace files (state, logs, registry). DB Summary builds from Ecto state.
+            </p>
+          </div>
+
+          <!-- Saved summaries from .cortex/summaries/ -->
+          <%= if @coordinator_summaries != [] do %>
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Saved Summaries</h2>
+              <div class="flex flex-wrap gap-2 mb-3">
+                <button
+                  :for={file <- @coordinator_summaries}
+                  phx-click="select_summary"
+                  phx-value-file={file}
+                  class={[
+                    "text-xs px-3 py-1.5 rounded border transition-colors",
+                    if(@selected_summary && @selected_summary.name == file,
+                      do: "border-cortex-500 text-cortex-300 bg-cortex-900/30",
+                      else: "border-gray-700 text-gray-400 hover:text-gray-300 hover:border-gray-500"
+                    )
+                  ]}
+                >
+                  {file}
+                </button>
+              </div>
+              <div :if={@selected_summary} class="bg-gray-950 rounded p-4 max-h-[60vh] overflow-y-auto">
+                <pre class="text-gray-300 text-sm font-mono whitespace-pre-wrap overflow-x-auto">{@selected_summary.content}</pre>
+              </div>
+            </div>
+          <% end %>
+
+          <!-- DB Summary -->
+          <%= if @run_summary do %>
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">DB Summary</h2>
+              <pre class="text-gray-300 text-sm font-mono whitespace-pre overflow-x-auto bg-gray-950 rounded p-4 max-h-[60vh] overflow-y-auto">{@run_summary}</pre>
+            </div>
+          <% end %>
+
+          <%= if @coordinator_summaries == [] and !@run_summary and !@summary_loading do %>
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-6 text-center">
+              <p class="text-gray-400 mb-3">No summaries yet.</p>
+              <p class="text-gray-500 text-sm">Click "Generate AI Summary" to spawn a haiku agent that analyzes your workspace files, or "Generate DB Summary" for a quick snapshot from database state.</p>
+            </div>
+          <% end %>
+        </div>
+      </div>
+
       <!-- ============ Diagnostics Tab ============ -->
       <div :if={@current_tab == "diagnostics"}>
         <%= if @run.workspace_path do %>
@@ -1640,7 +1703,6 @@ defmodule CortexWeb.RunDetailLive do
               <div class="flex items-center gap-4 mt-3 text-sm opacity-70 flex-wrap">
                 <span :if={report.session_id}>Session: <code class="font-mono">{report.session_id}</code></span>
                 <span :if={report.model}>Model: {report.model}</span>
-                <span :if={report.cost_usd}>Cost: ${Float.round(report.cost_usd * 1.0, 4)}</span>
                 <span :if={report.total_input_tokens > 0 or report.total_output_tokens > 0}>
                   Tokens: {format_token_count(report.total_input_tokens)} in / {format_token_count(report.total_output_tokens)} out
                 </span>
@@ -1812,10 +1874,6 @@ defmodule CortexWeb.RunDetailLive do
               <div>
                 <dt class="text-xs text-gray-500">Tokens</dt>
                 <dd class="text-sm text-gray-200"><.token_display input={sum_team_field(@team_runs, :input_tokens)} output={sum_team_field(@team_runs, :output_tokens)} /></dd>
-              </div>
-              <div>
-                <dt class="text-xs text-gray-500">Total Cost</dt>
-                <dd class="text-sm text-gray-200"><.cost_display amount={@run.total_cost_usd} /></dd>
               </div>
               <div>
                 <dt class="text-xs text-gray-500">Duration</dt>
@@ -2800,8 +2858,6 @@ defmodule CortexWeb.RunDetailLive do
 
     total_input = Enum.map(team_runs, &total_input/1) |> Enum.sum()
     total_output = sum_team_tokens(team_runs, :output_tokens)
-    total_cost = team_runs |> Enum.map(&(&1.cost_usd || 0.0)) |> Enum.sum()
-
     team_lines =
       team_runs
       |> Enum.sort_by(&{&1.tier || 0, &1.team_name})
@@ -2810,7 +2866,7 @@ defmodule CortexWeb.RunDetailLive do
     [
       "=== #{run.name || "Untitled"} ===",
       "Status: #{run.status} | Wall clock: #{wall_clock}",
-      "Tokens: #{format_token_count(total_input)} in / #{format_token_count(total_output)} out | Cost: $#{Float.round(total_cost * 1.0, 4)}",
+      "Tokens: #{format_token_count(total_input)} in / #{format_token_count(total_output)} out",
       "",
       "Teams:" | team_lines
     ]
@@ -2826,11 +2882,10 @@ defmodule CortexWeb.RunDetailLive do
     health = if status == "running", do: " (#{health_indicator_text(tr, last_seen)})", else: ""
 
     tokens = format_team_token_summary(tr)
-    cost = format_team_cost(tr)
     diag = format_team_diag_summary(tr, run, status, include_diagnostics)
     result = format_team_result_snippet(tr)
 
-    "  [T#{tr.tier || 0}] #{tr.team_name}: #{status}#{health}#{tokens}#{cost}#{diag}#{result}"
+    "  [T#{tr.tier || 0}] #{tr.team_name}: #{status}#{health}#{tokens}#{diag}#{result}"
   end
 
   defp format_team_token_summary(tr) do
@@ -2841,11 +2896,6 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
-  defp format_team_cost(tr) do
-    if tr.cost_usd && tr.cost_usd > 0,
-      do: " | $#{Float.round(tr.cost_usd * 1.0, 4)}",
-      else: ""
-  end
 
   defp format_team_diag_summary(tr, run, status, include_diagnostics) do
     if include_diagnostics and status in ["running", "stalled"] and run.workspace_path do

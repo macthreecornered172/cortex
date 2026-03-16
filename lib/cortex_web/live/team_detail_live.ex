@@ -227,7 +227,6 @@ defmodule CortexWeb.TeamDetailLive do
             output={@team_run.output_tokens}
             cache_read={@team_run.cache_read_tokens}
             cache_creation={@team_run.cache_creation_tokens}
-            cost={@team_run.cost_usd}
           /></span>
           <span class="ml-2 text-gray-400"><.duration_display ms={team_duration(@team_run)} /></span>
         <% else %>

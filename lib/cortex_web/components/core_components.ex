@@ -124,31 +124,6 @@ defmodule CortexWeb.CoreComponents do
   defp status_color(_), do: "bg-gray-700 text-gray-300"
 
   @doc """
-  Formats and displays a USD cost amount.
-
-  ## Examples
-
-      <.cost_display amount={0.0523} />
-      <.cost_display amount={nil} />
-  """
-  attr(:amount, :float, default: nil)
-
-  def cost_display(assigns) do
-    ~H"""
-    <span class="text-sm font-mono text-gray-300">
-      {format_cost(@amount)}
-    </span>
-    """
-  end
-
-  defp format_cost(nil), do: "--"
-
-  defp format_cost(amount) when is_number(amount),
-    do: "$#{:erlang.float_to_binary(amount / 1, decimals: 4)}"
-
-  defp format_cost(_), do: "--"
-
-  @doc """
   Formats and displays token counts (input/output).
 
   ## Examples
@@ -168,10 +143,10 @@ defmodule CortexWeb.CoreComponents do
   end
 
   @doc """
-  Click-to-expand token breakdown showing cache details and cost.
+  Click-to-expand token breakdown showing cache details.
 
   Shows compact "in / out" by default. Click to reveal:
-  input, cache read, cache creation, output, and cost.
+  input, cache read, cache creation, and output.
 
   ## Examples
 
@@ -180,14 +155,12 @@ defmodule CortexWeb.CoreComponents do
         output={45}
         cache_read={12000}
         cache_creation={3000}
-        cost={0.0523}
       />
   """
   attr(:input, :integer, default: nil)
   attr(:output, :integer, default: nil)
   attr(:cache_read, :integer, default: nil)
   attr(:cache_creation, :integer, default: nil)
-  attr(:cost, :float, default: nil)
   attr(:id, :string, required: true)
 
   def token_detail(assigns) do
@@ -227,12 +200,6 @@ defmodule CortexWeb.CoreComponents do
             <span class="text-gray-500">Output</span>
             <span class="text-gray-300">{format_token_count(@output)}</span>
           </div>
-          <%= if @cost do %>
-            <div class="border-t border-gray-700 pt-1.5 flex justify-between gap-4">
-              <span class="text-gray-500">Cost</span>
-              <span class="text-cortex-400">{format_cost(@cost)}</span>
-            </div>
-          <% end %>
         </div>
       </div>
     </span>
