@@ -202,7 +202,9 @@ defmodule Cortex.Store do
   @spec internal_team_names() :: [String.t()]
   def internal_team_names, do: @internal_team_names
 
-  @doc "Gets all internal agent jobs (coordinator, summary-agent, debug-agent) across all runs."
+  @job_team_names ~w(summary-agent debug-agent)
+
+  @doc "Gets internal agent jobs (summary-agent, debug-agent) across all runs. Excludes coordinator."
   @spec get_internal_jobs(keyword()) :: [TeamRun.t()]
   def get_internal_jobs(opts \\ []) do
     limit = Keyword.get(opts, :limit, 100)
@@ -210,7 +212,7 @@ defmodule Cortex.Store do
     from(tr in TeamRun,
       join: r in Run,
       on: tr.run_id == r.id,
-      where: tr.internal == true,
+      where: tr.team_name in ^@job_team_names,
       order_by: [desc: tr.started_at],
       limit: ^limit,
       preload: [:run]
