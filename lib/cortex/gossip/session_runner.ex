@@ -537,53 +537,34 @@ defmodule Cortex.Gossip.SessionRunner do
 
   # -- Exchange Loop -----------------------------------------------------------
 
-  @spec run_exchange_loop(GossipConfig.t(), %{String.t() => pid()}, String.t(), boolean(), String.t() | nil) :: :ok
+  @spec run_exchange_loop(
+          GossipConfig.t(),
+          %{String.t() => pid()},
+          String.t(),
+          boolean(),
+          String.t() | nil
+        ) :: :ok
   defp run_exchange_loop(config, stores, workspace_path, coordinator?, run_id) do
     agent_names = Enum.map(config.agents, & &1.name)
-    topology = Topology.build(agent_names, config.gossip.topology)
-    interval_ms = config.gossip.exchange_interval_seconds * 1_000
 
-    run_exchange_rounds(
-      config,
-      stores,
-      workspace_path,
-      coordinator?,
-      agent_names,
-      topology,
-      interval_ms,
-      run_id,
-      1
-    )
+    ctx = %{
+      stores: stores,
+      workspace_path: workspace_path,
+      coordinator?: coordinator?,
+      agent_names: agent_names,
+      topology: Topology.build(agent_names, config.gossip.topology),
+      interval_ms: config.gossip.exchange_interval_seconds * 1_000,
+      run_id: run_id
+    }
+
+    run_exchange_rounds(config, ctx, 1)
   end
 
-  defp run_exchange_rounds(
-         config,
-         _stores,
-         _workspace_path,
-         _coordinator?,
-         _agent_names,
-         _topology,
-         _interval_ms,
-         _run_id,
-         round
-       )
-       when round > config.gossip.rounds do
-    :ok
-  end
+  defp run_exchange_rounds(config, _ctx, round) when round > config.gossip.rounds, do: :ok
 
-  defp run_exchange_rounds(
-         config,
-         stores,
-         workspace_path,
-         coordinator?,
-         agent_names,
-         topology,
-         interval_ms,
-         run_id,
-         round
-       ) do
+  defp run_exchange_rounds(config, ctx, round) do
     # Wait for agents to accumulate findings
-    Process.sleep(interval_ms)
+    Process.sleep(ctx.interval_ms)
 
     Cortex.Logger.info(
       "Gossip round #{round}/#{config.gossip.rounds} — reading findings and exchanging",
@@ -593,32 +574,32 @@ defmodule Cortex.Gossip.SessionRunner do
     )
 
     # Read findings from all agents into their KnowledgeStores
-    ingest_all_findings(stores, workspace_path, config.agents)
+    ingest_all_findings(ctx.stores, ctx.workspace_path, config.agents)
 
     # Run gossip exchange between stores
-    do_exchange(stores, topology)
+    do_exchange(ctx.stores, ctx.topology)
 
     # Deliver new knowledge to agent inboxes
-    deliver_knowledge_to_inboxes(stores, workspace_path, agent_names)
+    deliver_knowledge_to_inboxes(ctx.stores, ctx.workspace_path, ctx.agent_names)
 
     # If coordinator is active, feed it the merged knowledge and process its output
-    if coordinator? do
+    if ctx.coordinator? do
       deliver_knowledge_to_coordinator(
-        stores,
-        workspace_path,
-        agent_names,
+        ctx.stores,
+        ctx.workspace_path,
+        ctx.agent_names,
         round,
         config.gossip.rounds
       )
 
-      process_coordinator_outbox(workspace_path, agent_names)
+      process_coordinator_outbox(ctx.workspace_path, ctx.agent_names)
     end
 
     broadcast(:gossip_round_completed, %{round: round, total: config.gossip.rounds})
-    persist_gossip_rounds(run_id, round, config.gossip.rounds)
+    persist_gossip_rounds(ctx.run_id, round, config.gossip.rounds)
 
     # Check for early termination from coordinator
-    if coordinator? && coordinator_requested_termination?(workspace_path) do
+    if ctx.coordinator? && coordinator_requested_termination?(ctx.workspace_path) do
       Cortex.Logger.info(
         "Coordinator requested early termination after round #{round}",
         project: config.name,
@@ -628,17 +609,7 @@ defmodule Cortex.Gossip.SessionRunner do
       broadcast(:gossip_early_termination, %{round: round, total: config.gossip.rounds})
       :ok
     else
-      run_exchange_rounds(
-        config,
-        stores,
-        workspace_path,
-        coordinator?,
-        agent_names,
-        topology,
-        interval_ms,
-        run_id,
-        round + 1
-      )
+      run_exchange_rounds(config, ctx, round + 1)
     end
   end
 
@@ -867,8 +838,14 @@ defmodule Cortex.Gossip.SessionRunner do
 
   defp persist_gossip_rounds(run_id, current, total) do
     case Cortex.Store.get_run(run_id) do
-      nil -> :ok
-      run -> Cortex.Store.update_run(run, %{gossip_rounds_completed: current, gossip_rounds_total: total})
+      nil ->
+        :ok
+
+      run ->
+        Cortex.Store.update_run(run, %{
+          gossip_rounds_completed: current,
+          gossip_rounds_total: total
+        })
     end
   rescue
     _ -> :ok

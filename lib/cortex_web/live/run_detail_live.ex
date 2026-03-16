@@ -396,7 +396,8 @@ defmodule CortexWeb.RunDetailLive do
 
     entry = %{
       team: "system",
-      text: "Gossip complete — #{total_entries} knowledge entries across #{map_size(by_topic)} topics",
+      text:
+        "Gossip complete — #{total_entries} knowledge entries across #{map_size(by_topic)} topics",
       kind: :message,
       at: format_now()
     }
@@ -635,7 +636,9 @@ defmodule CortexWeb.RunDetailLive do
   def handle_event("select_diag_team", %{"team" => team_name}, socket) do
     team_status = get_team_status(socket.assigns.team_runs, team_name)
     report = load_diagnostics(socket.assigns.run, team_name, team_status: team_status)
-    {:noreply, assign(socket, diagnostics_team: team_name, diagnostics_report: report, debug_report: nil)}
+
+    {:noreply,
+     assign(socket, diagnostics_team: team_name, diagnostics_report: report, debug_report: nil)}
   end
 
   def handle_event("refresh_diagnostics", _params, socket) do
@@ -2814,13 +2817,17 @@ defmodule CortexWeb.RunDetailLive do
 
       case Cortex.Repo.one(
              from(tr in Cortex.Store.Schemas.TeamRun,
-               where: tr.run_id == ^run_id and tr.team_name == ^team_name and tr.status == "running",
+               where:
+                 tr.run_id == ^run_id and tr.team_name == ^team_name and tr.status == "running",
                order_by: [desc: tr.started_at],
                limit: 1
              )
            ) do
-        %{} = tr -> Cortex.Store.update_team_run(tr, %{status: status, completed_at: DateTime.utc_now()})
-        nil -> :ok
+        %{} = tr ->
+          Cortex.Store.update_team_run(tr, %{status: status, completed_at: DateTime.utc_now()})
+
+        nil ->
+          :ok
       end
     end)
   end
@@ -2831,19 +2838,20 @@ defmodule CortexWeb.RunDetailLive do
         teams
         |> Enum.map(&Map.get(&1, "pid"))
         |> Enum.filter(&(is_integer(&1) and &1 > 0))
-        |> Enum.count(fn pid ->
-          # Send SIGTERM to the process group to kill claude and its children
-          case System.cmd("kill", ["-TERM", to_string(pid)], stderr_to_stdout: true) do
-            {_, 0} -> true
-            _ -> false
-          end
-        end)
+        |> Enum.count(&kill_pid/1)
 
       :error ->
         0
     end
   rescue
     _ -> 0
+  end
+
+  defp kill_pid(pid) do
+    case System.cmd("kill", ["-TERM", to_string(pid)], stderr_to_stdout: true) do
+      {_, 0} -> true
+      _ -> false
+    end
   end
 
   defp mark_run_stopped(run) do
@@ -3414,6 +3422,7 @@ defmodule CortexWeb.RunDetailLive do
 
     total_input = Enum.map(team_runs, &total_input/1) |> Enum.sum()
     total_output = sum_team_tokens(team_runs, :output_tokens)
+
     team_lines =
       team_runs
       |> Enum.sort_by(&{&1.tier || 0, &1.team_name})
@@ -3451,7 +3460,6 @@ defmodule CortexWeb.RunDetailLive do
       ""
     end
   end
-
 
   defp format_team_diag_summary(tr, run, status, include_diagnostics) do
     if include_diagnostics and status in ["running", "stalled"] and run.workspace_path do

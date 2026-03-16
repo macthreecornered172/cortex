@@ -189,7 +189,6 @@ defmodule CortexWeb.RunCompareLive do
   defp fmt_tokens(n) when n >= 1_000, do: "#{Float.round(n / 1_000, 1)}K"
   defp fmt_tokens(n), do: to_string(n)
 
-
   defp fmt_duration(nil), do: "--"
   defp fmt_duration(ms) when ms < 1_000, do: "#{ms}ms"
   defp fmt_duration(ms) when ms < 60_000, do: "#{Float.round(ms / 1_000, 1)}s"

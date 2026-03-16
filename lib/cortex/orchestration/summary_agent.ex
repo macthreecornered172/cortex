@@ -139,8 +139,7 @@ defmodule Cortex.Orchestration.SummaryAgent do
   defp build_prompt(run_name, context) do
     logs_section =
       context.logs
-      |> Enum.map(fn {file, lines} -> "### #{file}\n```\n#{lines}\n```" end)
-      |> Enum.join("\n\n")
+      |> Enum.map_join("\n\n", fn {file, lines} -> "### #{file}\n```\n#{lines}\n```" end)
 
     """
     You are a run analysis agent. Analyze the orchestration run data below and produce a concise summary.
