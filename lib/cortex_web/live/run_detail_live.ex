@@ -55,7 +55,7 @@ defmodule CortexWeb.RunDetailLive do
            coordinator_summaries: [],
            selected_summary: nil,
            run_summary: nil,
-           summary_loading: false,
+           summary_jobs: [],
            pid_status: %{},
            editing_name: false,
            name_form: %{"name" => ""},
@@ -102,7 +102,7 @@ defmodule CortexWeb.RunDetailLive do
            coordinator_summaries: [],
            selected_summary: nil,
            run_summary: nil,
-           summary_loading: false,
+           summary_jobs: [],
            pid_status: %{},
            editing_name: false,
            name_form: %{"name" => run.name || ""},
@@ -349,7 +349,7 @@ defmodule CortexWeb.RunDetailLive do
     {:noreply, socket}
   end
 
-  def handle_info({:ai_summary_result, {:ok, summary}}, socket) do
+  def handle_info({:ai_summary_result, job_id, {:ok, summary}}, socket) do
     summaries = read_coordinator_summaries(socket.assigns.run)
 
     entry = %{
@@ -359,10 +359,12 @@ defmodule CortexWeb.RunDetailLive do
       at: format_now()
     }
 
+    jobs = update_summary_job(socket.assigns.summary_jobs, job_id, :completed)
+
     {:noreply,
      socket
      |> assign(
-       summary_loading: false,
+       summary_jobs: jobs,
        coordinator_summaries: summaries,
        selected_summary: %{name: summary.filename || "latest", content: summary.content},
        activities: prepend_activity(socket.assigns.activities, entry)
@@ -370,7 +372,7 @@ defmodule CortexWeb.RunDetailLive do
      |> put_flash(:info, "AI summary ready")}
   end
 
-  def handle_info({:ai_summary_result, {:error, reason}}, socket) do
+  def handle_info({:ai_summary_result, job_id, {:error, reason}}, socket) do
     entry = %{
       team: "system",
       text: "AI summary failed: #{inspect(reason)}",
@@ -378,10 +380,12 @@ defmodule CortexWeb.RunDetailLive do
       at: format_now()
     }
 
+    jobs = update_summary_job(socket.assigns.summary_jobs, job_id, :failed, inspect(reason))
+
     {:noreply,
      socket
      |> assign(
-       summary_loading: false,
+       summary_jobs: jobs,
        activities: prepend_activity(socket.assigns.activities, entry)
      )
      |> put_flash(:error, "AI summary failed: #{inspect(reason)}")}
@@ -882,16 +886,54 @@ defmodule CortexWeb.RunDetailLive do
       not (run && workspace_path) ->
         {:noreply, put_flash(socket, :error, "No workspace path")}
 
-      socket.assigns.summary_loading ->
+      has_running_summary_job?(socket.assigns.summary_jobs) ->
         {:noreply, put_flash(socket, :info, "Summary already in progress...")}
 
       true ->
         liveview_pid = self()
+        run_id = run.id
+        job_id = System.unique_integer([:positive]) |> to_string()
+
+        on_activity = fn name, activity ->
+          Cortex.Events.broadcast(:team_activity, %{
+            run_id: run_id,
+            team_name: name,
+            type: activity.type,
+            tools: Map.get(activity, :tools, []),
+            details: Map.get(activity, :details, []),
+            timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+          })
+        end
+
+        on_token_update = fn name, tokens ->
+          Cortex.Events.broadcast(:team_tokens_updated, %{
+            run_id: run_id,
+            team_name: name,
+            input_tokens: tokens.input_tokens,
+            output_tokens: tokens.output_tokens,
+            cache_read_tokens: tokens.cache_read_tokens,
+            cache_creation_tokens: tokens.cache_creation_tokens
+          })
+        end
 
         Task.start(fn ->
-          result = SummaryAgent.generate(workspace_path, run_name: run.name || "Untitled")
-          send(liveview_pid, {:ai_summary_result, result})
+          result =
+            SummaryAgent.generate(workspace_path,
+              run_name: run.name || "Untitled",
+              on_activity: on_activity,
+              on_token_update: on_token_update
+            )
+
+          send(liveview_pid, {:ai_summary_result, job_id, result})
         end)
+
+        job = %{
+          id: job_id,
+          type: :ai_summary,
+          status: :running,
+          started_at: DateTime.utc_now(),
+          error: nil
+        }
 
         entry = %{
           team: "system",
@@ -903,7 +945,7 @@ defmodule CortexWeb.RunDetailLive do
         {:noreply,
          socket
          |> assign(
-           summary_loading: true,
+           summary_jobs: [job | socket.assigns.summary_jobs],
            activities: prepend_activity(socket.assigns.activities, entry)
          )
          |> put_flash(:info, "Generating AI summary...")}
@@ -1471,6 +1513,7 @@ defmodule CortexWeb.RunDetailLive do
                   <option value="">Select {participant_label(@run, :singular)}...</option>
                   <option value="__all__" selected={@selected_log_team == "__all__"}>All {participant_label(@run, :lower_plural)}</option>
                   <option value="coordinator" selected={@selected_log_team == "coordinator"}>coordinator</option>
+                  <option value="summary-agent" selected={@selected_log_team == "summary-agent"}>summary-agent</option>
                   <option :for={name <- @team_names} value={name} selected={name == @selected_log_team}>
                     {name}
                   </option>
@@ -1583,19 +1626,20 @@ defmodule CortexWeb.RunDetailLive do
           <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
             <div class="flex items-center gap-4">
               <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Generate</h2>
+              <% loading = has_running_summary_job?(@summary_jobs) %>
               <button
                 :if={@run && @run.workspace_path}
                 phx-click="request_ai_summary"
-                disabled={@summary_loading}
+                disabled={loading}
                 class={[
                   "rounded px-4 py-2 text-sm font-medium transition-colors",
-                  if(@summary_loading,
+                  if(loading,
                     do: "bg-gray-700 text-gray-400 cursor-wait",
                     else: "bg-cortex-600 text-white hover:bg-cortex-500"
                   )
                 ]}
               >
-                {if @summary_loading, do: "Generating AI Summary...", else: "Generate AI Summary"}
+                {if loading, do: "Generating AI Summary...", else: "Generate AI Summary"}
               </button>
               <button
                 phx-click="generate_summary"
@@ -1614,6 +1658,52 @@ defmodule CortexWeb.RunDetailLive do
               AI Summary spawns a haiku agent to analyze workspace files (state, logs, registry). DB Summary builds from Ecto state.
             </p>
           </div>
+
+          <!-- Summary Jobs -->
+          <%= if @summary_jobs != [] do %>
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Summary Jobs</h2>
+              <div class="space-y-2">
+                <div :for={job <- @summary_jobs} class={[
+                  "flex items-center justify-between rounded p-3 text-sm",
+                  case job.status do
+                    :running -> "bg-blue-900/20 border border-blue-800/50"
+                    :completed -> "bg-green-900/20 border border-green-800/50"
+                    :failed -> "bg-red-900/20 border border-red-800/50"
+                  end
+                ]}>
+                  <div class="flex items-center gap-3">
+                    <span class={[
+                      "text-xs font-medium px-2 py-0.5 rounded",
+                      case job.status do
+                        :running -> "bg-blue-900/40 text-blue-300"
+                        :completed -> "bg-green-900/40 text-green-300"
+                        :failed -> "bg-red-900/40 text-red-300"
+                      end
+                    ]}>
+                      {case job.status do
+                        :running -> "Running"
+                        :completed -> "Done"
+                        :failed -> "Failed"
+                      end}
+                    </span>
+                    <span class="text-gray-400">AI Summary</span>
+                    <%= if job.status == :running do %>
+                      <span class="text-gray-500 text-xs">{elapsed_since(job.started_at)}</span>
+                    <% end %>
+                  </div>
+                  <div class="flex items-center gap-3 text-xs">
+                    <%= if job.error do %>
+                      <span class="text-red-400 truncate max-w-xs">{job.error}</span>
+                    <% end %>
+                    <span class="text-gray-600">
+                      {Calendar.strftime(job.started_at, "%H:%M:%S")}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          <% end %>
 
           <!-- Saved summaries from .cortex/summaries/ -->
           <%= if @coordinator_summaries != [] do %>
@@ -1649,7 +1739,7 @@ defmodule CortexWeb.RunDetailLive do
             </div>
           <% end %>
 
-          <%= if @coordinator_summaries == [] and !@run_summary and !@summary_loading do %>
+          <%= if @coordinator_summaries == [] and !@run_summary and @summary_jobs == [] do %>
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-6 text-center">
               <p class="text-gray-400 mb-3">No summaries yet.</p>
               <p class="text-gray-500 text-sm">Click "Generate AI Summary" to spawn a haiku agent that analyzes your workspace files, or "Generate DB Summary" for a quick snapshot from database state.</p>
@@ -2617,6 +2707,20 @@ defmodule CortexWeb.RunDetailLive do
       {:ok, data} -> %{name: filename, content: data}
       _ -> fallback
     end
+  end
+
+  defp has_running_summary_job?(jobs) do
+    Enum.any?(jobs, fn j -> j.status == :running end)
+  end
+
+  defp update_summary_job(jobs, job_id, status, error \\ nil) do
+    Enum.map(jobs, fn j ->
+      if j.id == job_id do
+        %{j | status: status, error: error}
+      else
+        j
+      end
+    end)
   end
 
   defp read_coordinator_summaries(run) do

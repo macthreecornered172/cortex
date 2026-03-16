@@ -32,6 +32,8 @@ defmodule Cortex.Orchestration.SummaryAgent do
 
     - `:run_name` — display name for the run (default: `"Untitled"`)
     - `:command` — override the claude command path (default: `"claude"`)
+    - `:on_activity` — `fn name, activity -> ...` callback for tool use events
+    - `:on_token_update` — `fn name, tokens -> ...` callback for token updates
 
   ## Returns
 
@@ -42,21 +44,29 @@ defmodule Cortex.Orchestration.SummaryAgent do
   def generate(workspace_path, opts \\ []) do
     cortex_path = Path.join(workspace_path, ".cortex")
     run_name = Keyword.get(opts, :run_name, "Untitled")
+    log_path = Path.join([cortex_path, "logs", "summary-agent.log"])
 
     context = gather_context(cortex_path)
     prompt = build_prompt(run_name, context)
 
-    result =
-      Spawner.spawn(
-        team_name: "summary-agent",
-        prompt: prompt,
-        model: "haiku",
-        max_turns: 1,
-        permission_mode: "bypassPermissions",
-        timeout_minutes: 2,
-        command: Keyword.get(opts, :command, "claude"),
-        cwd: workspace_path
-      )
+    spawn_opts = [
+      team_name: "summary-agent",
+      prompt: prompt,
+      model: "haiku",
+      max_turns: 1,
+      permission_mode: "bypassPermissions",
+      timeout_minutes: 2,
+      command: Keyword.get(opts, :command, "claude"),
+      cwd: workspace_path,
+      log_path: log_path
+    ]
+
+    spawn_opts =
+      spawn_opts
+      |> maybe_add_callback(:on_activity, opts)
+      |> maybe_add_callback(:on_token_update, opts)
+
+    result = Spawner.spawn(spawn_opts)
 
     case result do
       {:ok, %{result: text, status: :success}} ->
@@ -165,6 +175,13 @@ defmodule Cortex.Orchestration.SummaryAgent do
   end
 
   # -- Persistence --
+
+  defp maybe_add_callback(opts, key, source_opts) do
+    case Keyword.get(source_opts, key) do
+      nil -> opts
+      cb -> Keyword.put(opts, key, cb)
+    end
+  end
 
   defp save_to_disk(cortex_path, content) do
     dir = Path.join(cortex_path, "summaries")
