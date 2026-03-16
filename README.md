@@ -95,111 +95,33 @@ make up    # Phoenix:4000 + Prometheus:9090 + Grafana:3000 (admin/cortex)
 
 ## Configuration
 
-### DAG Workflow (`examples/dag-demo.yaml`)
+Projects are defined in YAML. Two modes:
 
-Teams execute in dependency order — tier 0 runs in parallel, tier 1 waits for its dependencies, etc.
+**DAG workflow** — teams with dependencies, executed in parallel tiers:
 
 ```yaml
-name: "dag-demo"
-
-defaults:
-  model: haiku
-  max_turns: 50
-  permission_mode: bypassPermissions
-  timeout_minutes: 10
-
 teams:
-  # Tier 0 — three parallel research teams
-  - name: requirements
-    lead:
-      role: "Requirements Analyst"
-    tasks:
-      - summary: "Gather requirements for a CLI calculator app"
-        details: "Supported ops, input format, error handling, edge cases."
-        deliverables: ["requirements.md"]
-
-  - name: tech-research
-    lead:
-      role: "Tech Researcher"
-    tasks:
-      - summary: "Research Go CLI patterns for a calculator"
-        deliverables: ["tech-research.md"]
-
-  - name: test-strategy
-    lead:
-      role: "QA Strategist"
-    tasks:
-      - summary: "Define test strategy"
-        deliverables: ["test-strategy.md"]
-
-  # Tier 1 — depends on tier 0
-  - name: architecture
-    lead:
-      role: "Software Architect"
-    tasks:
-      - summary: "Design the calculator architecture"
-        deliverables: ["architecture.md"]
-    depends_on: [requirements, tech-research]
-
-  - name: test-plan
-    lead:
-      role: "QA Lead"
-    tasks:
-      - summary: "Write detailed test cases"
-        deliverables: ["test-plan.md"]
-    depends_on: [requirements, test-strategy]
-
-  # Tier 2 — final synthesis
-  - name: integration
-    lead:
-      role: "Integration Lead"
-    tasks:
-      - summary: "Produce the final implementation plan"
-        deliverables: ["implementation-plan.md"]
-    depends_on: [architecture, test-plan]
+  - name: backend
+    lead: { role: "Backend Engineer" }
+    tasks: [{ summary: "Build the API", deliverables: ["api.ex"] }]
+  - name: frontend
+    lead: { role: "Frontend Engineer" }
+    tasks: [{ summary: "Build the UI" }]
+    depends_on: [backend]
 ```
 
-### Gossip Session (`examples/gossip-simple.yaml`)
-
-Agents explore independently while a background coordinator periodically exchanges knowledge between them.
+**Gossip** — agents explore independently, knowledge exchanged periodically:
 
 ```yaml
-name: "gossip-simple"
 mode: gossip
-
-cluster_context: |
-  You're part of a small team brainstorming names for a new coffee shop
-  that roasts its own beans and has a cozy library vibe. Share your best
-  ideas — build on what others suggest.
-
-defaults:
-  model: haiku
-  max_turns: 50
-  permission_mode: bypassPermissions
-  timeout_minutes: 5
-
-gossip:
-  rounds: 3                        # knowledge exchange rounds
-  topology: full_mesh              # full_mesh | ring | random
-  exchange_interval_seconds: 30    # seconds between rounds
-
+gossip: { rounds: 3, topology: full_mesh, exchange_interval_seconds: 30 }
 agents:
-  - name: branding
-    topic: "shop names"
-    prompt: |
-      Brainstorm 5 creative names for a coffee shop that roasts its own beans
-      and has a cozy library atmosphere. Build on any peer ideas you receive.
-
-  - name: vibes
-    topic: "shop names"
-    prompt: |
-      Brainstorm 5 creative names for a coffee-and-books shop. Focus on names
-      that evoke warmth, curiosity, and the smell of fresh roast.
-
-seed_knowledge:
-  - topic: "context"
-    content: "College town. Target: students, professors, remote workers."
+  - name: analyst
+    topic: "competitors"
+    prompt: "Research the top 5 competitors..."
 ```
+
+See `examples/` for complete configs (`dag-demo.yaml`, `gossip-simple.yaml`, `gossip.yaml`).
 
 ### Config Reference
 
