@@ -517,6 +517,11 @@ defmodule CortexWeb.RunDetailLive do
     {:noreply, assign(socket, current_tab: "diagnostics")}
   end
 
+  def handle_event("switch_tab", %{"tab" => "summaries"}, socket) do
+    summaries = read_coordinator_summaries(socket.assigns.run)
+    {:noreply, assign(socket, current_tab: "summaries", coordinator_summaries: summaries)}
+  end
+
   def handle_event("switch_tab", %{"tab" => tab}, socket) do
     {:noreply, assign(socket, current_tab: tab)}
   end
@@ -640,10 +645,16 @@ defmodule CortexWeb.RunDetailLive do
 
         Task.start(fn ->
           result =
-            DebugAgent.analyze(run.workspace_path, team_name,
-              run_name: run.name || "Untitled",
-              on_activity: on_activity
-            )
+            try do
+              DebugAgent.analyze(run.workspace_path, team_name,
+                run_name: run.name || "Untitled",
+                on_activity: on_activity
+              )
+            rescue
+              e -> {:error, Exception.message(e)}
+            catch
+              kind, reason -> {:error, "#{kind}: #{inspect(reason)}"}
+            end
 
           send(liveview_pid, {:debug_report_result, result})
         end)
@@ -1023,11 +1034,17 @@ defmodule CortexWeb.RunDetailLive do
 
         Task.start(fn ->
           result =
-            SummaryAgent.generate(workspace_path,
-              run_name: run.name || "Untitled",
-              on_activity: on_activity,
-              on_token_update: on_token_update
-            )
+            try do
+              SummaryAgent.generate(workspace_path,
+                run_name: run.name || "Untitled",
+                on_activity: on_activity,
+                on_token_update: on_token_update
+              )
+            rescue
+              e -> {:error, Exception.message(e)}
+            catch
+              kind, reason -> {:error, "#{kind}: #{inspect(reason)}"}
+            end
 
           send(liveview_pid, {:ai_summary_result, job_id, result})
         end)
@@ -1553,7 +1570,7 @@ defmodule CortexWeb.RunDetailLive do
                       class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
                     >
                       <option value="">Select {participant_label(@run, :singular)}...</option>
-                      <option value="coordinator" selected={@messages_team == "coordinator"}>coordinator</option>
+                      <option value="coordinator" selected={@messages_team == "coordinator"}>[internal] coordinator</option>
                       <option :for={name <- @team_names} value={name} selected={name == @messages_team}>
                         {name}
                       </option>
@@ -1646,8 +1663,8 @@ defmodule CortexWeb.RunDetailLive do
                 >
                   <option value="">Select {participant_label(@run, :singular)}...</option>
                   <option value="__all__" selected={@selected_log_team == "__all__"}>All {participant_label(@run, :lower_plural)}</option>
-                  <option value="coordinator" selected={@selected_log_team == "coordinator"}>coordinator</option>
-                  <option value="summary-agent" selected={@selected_log_team == "summary-agent"}>summary-agent</option>
+                  <option value="coordinator" selected={@selected_log_team == "coordinator"}>[internal] coordinator</option>
+                  <option value="summary-agent" selected={@selected_log_team == "summary-agent"}>[internal] summary-agent</option>
                   <option :for={name <- @team_names} value={name} selected={name == @selected_log_team}>
                     {name}
                   </option>
@@ -1798,43 +1815,21 @@ defmodule CortexWeb.RunDetailLive do
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
               <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Summary Jobs</h2>
               <div class="space-y-2">
-                <div :for={job <- @summary_jobs} class={[
-                  "flex items-center justify-between rounded p-3 text-sm",
-                  case job.status do
-                    :running -> "bg-blue-900/20 border border-blue-800/50"
-                    :completed -> "bg-green-900/20 border border-green-800/50"
-                    :failed -> "bg-red-900/20 border border-red-800/50"
-                  end
-                ]}>
-                  <div class="flex items-center gap-3">
-                    <span class={[
-                      "text-xs font-medium px-2 py-0.5 rounded",
-                      case job.status do
-                        :running -> "bg-blue-900/40 text-blue-300"
-                        :completed -> "bg-green-900/40 text-green-300"
-                        :failed -> "bg-red-900/40 text-red-300"
-                      end
-                    ]}>
-                      {case job.status do
-                        :running -> "Running"
-                        :completed -> "Done"
-                        :failed -> "Failed"
-                      end}
-                    </span>
-                    <span class="text-gray-400">AI Summary</span>
-                    <%= if job.status == :running do %>
-                      <span class="text-gray-500 text-xs">{elapsed_since(job.started_at)}</span>
-                    <% end %>
+                <%= for job <- @summary_jobs do %>
+                  <div class={["flex items-center justify-between rounded p-3 text-sm", job_row_class(job.status)]}>
+                    <div class="flex items-center gap-3">
+                      <span class={["text-xs font-medium px-2 py-0.5 rounded", job_badge_class(job.status)]}>
+                        {job_label(job.status)}
+                      </span>
+                      <span class="text-gray-400">AI Summary</span>
+                      <span :if={job.status == :running} class="text-gray-500 text-xs">{elapsed_since(job.started_at)}</span>
+                    </div>
+                    <div class="flex items-center gap-3 text-xs">
+                      <span :if={job.error} class="text-red-400 truncate max-w-xs">{job.error}</span>
+                      <span class="text-gray-600">{Calendar.strftime(job.started_at, "%H:%M:%S")}</span>
+                    </div>
                   </div>
-                  <div class="flex items-center gap-3 text-xs">
-                    <%= if job.error do %>
-                      <span class="text-red-400 truncate max-w-xs">{job.error}</span>
-                    <% end %>
-                    <span class="text-gray-600">
-                      {Calendar.strftime(job.started_at, "%H:%M:%S")}
-                    </span>
-                  </div>
-                </div>
+                <% end %>
               </div>
             </div>
           <% end %>
@@ -2870,6 +2865,21 @@ defmodule CortexWeb.RunDetailLive do
       _ -> fallback
     end
   end
+
+  defp job_row_class(:running), do: "bg-blue-900/20 border border-blue-800/50"
+  defp job_row_class(:completed), do: "bg-green-900/20 border border-green-800/50"
+  defp job_row_class(:failed), do: "bg-red-900/20 border border-red-800/50"
+  defp job_row_class(_), do: "bg-gray-900/20 border border-gray-800/50"
+
+  defp job_badge_class(:running), do: "bg-blue-900/40 text-blue-300"
+  defp job_badge_class(:completed), do: "bg-green-900/40 text-green-300"
+  defp job_badge_class(:failed), do: "bg-red-900/40 text-red-300"
+  defp job_badge_class(_), do: "bg-gray-900/40 text-gray-300"
+
+  defp job_label(:running), do: "Running"
+  defp job_label(:completed), do: "Done"
+  defp job_label(:failed), do: "Failed"
+  defp job_label(_), do: "Unknown"
 
   defp has_running_summary_job?(jobs) do
     Enum.any?(jobs, fn j -> j.status == :running end)
