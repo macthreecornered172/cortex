@@ -1,8 +1,8 @@
 defmodule Cortex.Messaging.BusTest do
   use ExUnit.Case, async: false
 
-  alias Cortex.Messaging.Bus
   alias Cortex.Messaging.AgentIntegration
+  alias Cortex.Messaging.Bus
 
   # These tests use the global Router and MailboxRegistry, so async: false.
 

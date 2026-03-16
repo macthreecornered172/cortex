@@ -256,7 +256,7 @@ defmodule Cortex.Messaging.InboxBridgeTest do
       assert is_list(messages)
       # Due to read-modify-write races with concurrent delivery, we may not
       # get all 20, but the file should be valid JSON and non-empty
-      assert length(messages) > 0
+      assert messages != []
 
       # Verify JSON integrity by re-reading raw content
       raw = File.read!(InboxBridge.inbox_path(tmp_dir, "backend"))

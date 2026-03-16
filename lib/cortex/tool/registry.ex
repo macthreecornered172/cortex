@@ -57,23 +57,27 @@ defmodule Cortex.Tool.Registry do
   @spec register(module(), GenServer.name()) :: :ok | {:error, :invalid_tool}
   def register(tool_module, registry \\ __MODULE__) do
     if valid_tool?(tool_module) do
-      tool_name = tool_module.name()
-
-      Agent.update(registry, fn tools ->
-        if Map.has_key?(tools, tool_name) do
-          Logger.warning(
-            "Tool registry: overwriting tool #{inspect(tool_name)} " <>
-              "(was #{inspect(Map.get(tools, tool_name))}, now #{inspect(tool_module)})"
-          )
-        end
-
-        Map.put(tools, tool_name, tool_module)
-      end)
-
-      :ok
+      do_register(tool_module, registry)
     else
       {:error, :invalid_tool}
     end
+  end
+
+  defp do_register(tool_module, registry) do
+    tool_name = tool_module.name()
+
+    Agent.update(registry, fn tools ->
+      if Map.has_key?(tools, tool_name) do
+        Logger.warning(
+          "Tool registry: overwriting tool #{inspect(tool_name)} " <>
+            "(was #{inspect(Map.get(tools, tool_name))}, now #{inspect(tool_module)})"
+        )
+      end
+
+      Map.put(tools, tool_name, tool_module)
+    end)
+
+    :ok
   end
 
   @doc """

@@ -131,15 +131,15 @@ defmodule Cortex.Coordinator.Prompt do
     tiers
     |> Enum.with_index()
     |> Enum.map_join("\n\n", fn {team_names, tier_idx} ->
-      team_lines =
-        Enum.map_join(team_names, "\n", fn name ->
-          case Enum.find(teams, fn t -> t.name == name end) do
-            nil -> "  - #{name}"
-            team -> "  - **#{name}** — #{team.lead.role}"
-          end
-        end)
-
+      team_lines = Enum.map_join(team_names, "\n", &format_team_line(&1, teams))
       "Tier #{tier_idx}:\n#{team_lines}"
     end)
+  end
+
+  defp format_team_line(name, teams) do
+    case Enum.find(teams, fn t -> t.name == name end) do
+      nil -> "  - #{name}"
+      team -> "  - **#{name}** — #{team.lead.role}"
+    end
   end
 end

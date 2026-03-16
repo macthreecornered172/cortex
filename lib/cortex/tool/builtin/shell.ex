@@ -122,18 +122,16 @@ defmodule Cortex.Tool.Builtin.Shell do
   # Execute the command via System.cmd and handle the result.
   @spec execute_command(String.t(), [String.t()]) :: {:ok, String.t()} | {:error, term()}
   defp execute_command(command, args) do
-    try do
-      case System.cmd(command, args, stderr_to_stdout: true) do
-        {output, 0} ->
-          {:ok, truncate_output(output)}
+    case System.cmd(command, args, stderr_to_stdout: true) do
+      {output, 0} ->
+        {:ok, truncate_output(output)}
 
-        {output, exit_code} ->
-          {:error, {:exit_code, exit_code, truncate_output(output)}}
-      end
-    rescue
-      e in ErlangError ->
-        {:error, {:execution_error, Exception.message(e)}}
+      {output, exit_code} ->
+        {:error, {:exit_code, exit_code, truncate_output(output)}}
     end
+  rescue
+    e in ErlangError ->
+      {:error, {:execution_error, Exception.message(e)}}
   end
 
   # Truncate output to the configured max size.

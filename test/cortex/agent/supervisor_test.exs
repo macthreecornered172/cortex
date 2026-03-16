@@ -1,8 +1,8 @@
 defmodule Cortex.Agent.SupervisorTest do
   use ExUnit.Case, async: true
 
-  alias Cortex.Agent.Supervisor, as: AgentSupervisor
   alias Cortex.Agent.Registry, as: AgentRegistry
+  alias Cortex.Agent.Supervisor, as: AgentSupervisor
 
   # Helper: find the agent ID registered to a given pid
   defp find_agent_id(pid) do

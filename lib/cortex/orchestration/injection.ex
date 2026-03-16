@@ -9,6 +9,7 @@ defmodule Cortex.Orchestration.Injection do
   a "Your Team" section describing the available teammates.
   """
 
+  alias Cortex.Coordinator.Prompt, as: CoordinatorPrompt
   alias Cortex.Orchestration.Config
   alias Cortex.Orchestration.Config.{Defaults, Team}
   alias Cortex.Orchestration.State
@@ -98,7 +99,7 @@ defmodule Cortex.Orchestration.Injection do
   """
   @spec build_coordinator_prompt(Config.t(), [[String.t()]], String.t()) :: String.t()
   def build_coordinator_prompt(%Config{} = config, tiers, workspace_path) do
-    Cortex.Coordinator.Prompt.build(config, tiers, workspace_path)
+    CoordinatorPrompt.build(config, tiers, workspace_path)
   end
 
   # --- Private section builders ---

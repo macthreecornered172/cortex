@@ -170,38 +170,33 @@ defmodule Cortex.Gossip.Config.Loader do
     agent_errors =
       agents
       |> Enum.with_index()
-      |> Enum.flat_map(fn {agent, i} ->
-        agent_prefix = "agent[#{i}] (#{agent.name || "unnamed"})"
+      |> Enum.flat_map(&validate_single_agent/1)
 
-        name_err =
-          if agent.name == "" or is_nil(agent.name),
-            do: ["#{agent_prefix}: name cannot be empty"],
-            else: []
-
-        topic_err =
-          if agent.topic == "" or is_nil(agent.topic),
-            do: ["#{agent_prefix}: topic cannot be empty"],
-            else: []
-
-        prompt_err =
-          if agent.prompt == "" or is_nil(agent.prompt),
-            do: ["#{agent_prefix}: prompt cannot be empty"],
-            else: []
-
-        name_err ++ topic_err ++ prompt_err
-      end)
-
-    # Check unique names
-    names = Enum.map(agents, & &1.name) |> Enum.filter(&(&1 != ""))
-    dupes = names -- Enum.uniq(names)
-
-    dupe_errors =
-      case dupes do
-        [] -> []
-        dupes -> ["duplicate agent names: #{Enum.join(Enum.uniq(dupes), ", ")}"]
-      end
+    dupe_errors = check_duplicate_names(agents)
 
     Enum.reverse(agent_errors ++ dupe_errors) ++ errors
+  end
+
+  defp validate_single_agent({agent, i}) do
+    prefix = "agent[#{i}] (#{agent.name || "unnamed"})"
+
+    []
+    |> check_blank(agent.name, "#{prefix}: name cannot be empty")
+    |> check_blank(agent.topic, "#{prefix}: topic cannot be empty")
+    |> check_blank(agent.prompt, "#{prefix}: prompt cannot be empty")
+  end
+
+  defp check_blank(errors, value, msg) when value in ["", nil], do: [msg | errors]
+  defp check_blank(errors, _value, _msg), do: errors
+
+  defp check_duplicate_names(agents) do
+    names = agents |> Enum.map(& &1.name) |> Enum.filter(&(&1 != ""))
+    dupes = names -- Enum.uniq(names)
+
+    case dupes do
+      [] -> []
+      dupes -> ["duplicate agent names: #{Enum.join(Enum.uniq(dupes), ", ")}"]
+    end
   end
 
   defp validate_gossip_settings(errors, %{gossip: settings}) do

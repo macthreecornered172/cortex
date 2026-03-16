@@ -1,8 +1,8 @@
 defmodule Cortex.Orchestration.InjectionTest do
   use ExUnit.Case, async: true
 
-  alias Cortex.Orchestration.Injection
   alias Cortex.Orchestration.Config.{Defaults, Lead, Member, Task, Team}
+  alias Cortex.Orchestration.Injection
   alias Cortex.Orchestration.{State, TeamState}
 
   @defaults %Defaults{

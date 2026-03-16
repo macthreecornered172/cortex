@@ -39,64 +39,74 @@ defmodule Cortex.Orchestration.Summary do
   @spec format(State.t()) :: String.t()
   def format(%State{} = state) do
     team_names = state.teams |> Map.keys() |> Enum.sort()
-
-    total_input =
-      state.teams
-      |> Map.values()
-      |> Enum.map(fn ts ->
-        (ts.input_tokens || 0) + (ts.cache_read_tokens || 0) + (ts.cache_creation_tokens || 0)
-      end)
-      |> Enum.sum()
-
-    total_output =
-      state.teams
-      |> Map.values()
-      |> Enum.map(fn ts -> ts.output_tokens || 0 end)
-      |> Enum.sum()
-
-    total_duration =
-      state.teams
-      |> Map.values()
-      |> Enum.map(fn ts -> ts.duration_ms || 0 end)
-      |> Enum.sum()
-
+    teams = Map.values(state.teams)
+    {total_input, total_output, total_duration} = compute_totals(teams)
     overall_status = compute_overall_status(state)
-
-    rows =
-      Enum.map(team_names, fn name ->
-        ts = Map.fetch!(state.teams, name)
-
-        team_total_input =
-          (ts.input_tokens || 0) + (ts.cache_read_tokens || 0) +
-            (ts.cache_creation_tokens || 0)
-
-        tokens_str = format_tokens_pair(team_total_input, ts.output_tokens)
-        {name, ts.status || "pending", tokens_str, format_duration(ts.duration_ms)}
-      end)
+    rows = build_rows(state, team_names)
 
     # Compute column widths
     name_width = max_width(rows, 0, "Team", 12)
     status_width = max_width(rows, 1, "Status", 7)
     tokens_width = max_width(rows, 2, "Tokens", 14)
     duration_width = max_width(rows, 3, "Duration", 8)
+    widths = {name_width, status_width, tokens_width, duration_width}
 
+    render_table(
+      state.project,
+      overall_status,
+      rows,
+      widths,
+      total_input,
+      total_output,
+      total_duration
+    )
+  end
+
+  defp compute_totals(teams) do
+    total_input = Enum.sum(Enum.map(teams, &team_input_tokens/1))
+    total_output = Enum.sum(Enum.map(teams, fn ts -> ts.output_tokens || 0 end))
+    total_duration = Enum.sum(Enum.map(teams, fn ts -> ts.duration_ms || 0 end))
+    {total_input, total_output, total_duration}
+  end
+
+  defp team_input_tokens(ts) do
+    (ts.input_tokens || 0) + (ts.cache_read_tokens || 0) + (ts.cache_creation_tokens || 0)
+  end
+
+  defp build_rows(state, team_names) do
+    Enum.map(team_names, fn name ->
+      ts = Map.fetch!(state.teams, name)
+      tokens_str = format_tokens_pair(team_input_tokens(ts), ts.output_tokens)
+      {name, ts.status || "pending", tokens_str, format_duration(ts.duration_ms)}
+    end)
+  end
+
+  defp render_table(
+         project,
+         overall_status,
+         rows,
+         {nw, sw, tw, dw},
+         total_input,
+         total_output,
+         total_duration
+       ) do
     header_line =
-      "  #{pad("Team", name_width)} | #{pad("Status", status_width)} | #{pad("Tokens", tokens_width)} | #{pad("Duration", duration_width)}"
+      "  #{pad("Team", nw)} | #{pad("Status", sw)} | #{pad("Tokens", tw)} | #{pad("Duration", dw)}"
 
     separator =
-      "  #{String.duplicate("-", name_width)}-+-#{String.duplicate("-", status_width)}-+-#{String.duplicate("-", tokens_width)}-+-#{String.duplicate("-", duration_width)}"
+      "  #{String.duplicate("-", nw)}-+-#{String.duplicate("-", sw)}-+-#{String.duplicate("-", tw)}-+-#{String.duplicate("-", dw)}"
 
-    title = "  Cortex: #{state.project} -- #{overall_status}"
+    title = "  Cortex: #{project} -- #{overall_status}"
     banner_width = max(String.length(title) + 4, String.length(header_line) + 2)
     banner = String.duplicate("=", banner_width)
 
     data_rows =
       Enum.map(rows, fn {name, status, tokens, duration} ->
-        "  #{pad(name, name_width)} | #{pad(status, status_width)} | #{pad(tokens, tokens_width)} | #{pad(duration, duration_width)}"
+        "  #{pad(name, nw)} | #{pad(status, sw)} | #{pad(tokens, tw)} | #{pad(duration, dw)}"
       end)
 
     total_row =
-      "  #{pad("Total", name_width)} | #{pad("", status_width)} | #{pad(format_tokens_pair(total_input, total_output), tokens_width)} | #{pad(format_duration(total_duration), duration_width)}"
+      "  #{pad("Total", nw)} | #{pad("", sw)} | #{pad(format_tokens_pair(total_input, total_output), tw)} | #{pad(format_duration(total_duration), dw)}"
 
     lines =
       [banner, title, banner, header_line, separator] ++

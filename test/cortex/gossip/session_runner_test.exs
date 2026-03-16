@@ -1,9 +1,9 @@
 defmodule Cortex.Gossip.SessionRunnerTest do
   use ExUnit.Case, async: true
 
-  alias Cortex.Gossip.SessionRunner
   alias Cortex.Gossip.Config, as: GossipConfig
   alias Cortex.Gossip.Config.{Agent, GossipSettings, SeedKnowledge}
+  alias Cortex.Gossip.SessionRunner
   alias Cortex.Orchestration.Config.Defaults
 
   @moduletag :tmp_dir

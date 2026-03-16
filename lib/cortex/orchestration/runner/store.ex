@@ -15,11 +15,9 @@ defmodule Cortex.Orchestration.Runner.Store do
   """
   @spec safe_call((-> any())) :: any()
   def safe_call(fun) do
-    try do
-      fun.()
-    rescue
-      _ -> :ok
-    end
+    fun.()
+  rescue
+    _ -> :ok
   end
 
   @doc """

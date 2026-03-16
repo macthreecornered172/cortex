@@ -756,7 +756,7 @@ defmodule CortexWeb.RunDetailLive do
       !(run && run.workspace_path && run.config_yaml) ->
         {:noreply, put_flash(socket, :error, "No workspace path or config available")}
 
-      is_gossip?(run) ->
+      gossip?(run) ->
         start_gossip_coordinator(socket, run)
 
       true ->
@@ -1196,7 +1196,7 @@ defmodule CortexWeb.RunDetailLive do
           <% end %>
         </div>
 
-        <%= if is_gossip?(@run) do %>
+        <%= if gossip?(@run) do %>
           <!-- Gossip Info -->
           <% gossip_info = parse_gossip_info(@run) %>
           <%= if gossip_info do %>
@@ -1806,8 +1806,8 @@ defmodule CortexWeb.RunDetailLive do
                 <dd class="text-sm text-gray-200">{length(@team_runs)}</dd>
               </div>
               <div>
-                <dt class="text-xs text-gray-500">{if is_gossip?(@run), do: "Rounds", else: "Tiers"}</dt>
-                <dd class="text-sm text-gray-200">{if is_gossip?(@run), do: (parse_gossip_info(@run) || %{rounds: 0}).rounds, else: length(@tiers)}</dd>
+                <dt class="text-xs text-gray-500">{if gossip?(@run), do: "Rounds", else: "Tiers"}</dt>
+                <dd class="text-sm text-gray-200">{if gossip?(@run), do: (parse_gossip_info(@run) || %{rounds: 0}).rounds, else: length(@tiers)}</dd>
               </div>
               <div>
                 <dt class="text-xs text-gray-500">Tokens</dt>
@@ -2711,12 +2711,12 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
-  defp is_gossip?(run), do: run.mode == "gossip"
+  defp gossip?(run), do: run.mode == "gossip"
 
   # Terminology: gossip has "nodes", workflows have "teams"
-  defp participant_label(run, :singular), do: if(is_gossip?(run), do: "node", else: "team")
-  defp participant_label(run, :plural), do: if(is_gossip?(run), do: "Nodes", else: "Teams")
-  defp participant_label(run, :lower_plural), do: if(is_gossip?(run), do: "nodes", else: "teams")
+  defp participant_label(run, :singular), do: if(gossip?(run), do: "node", else: "team")
+  defp participant_label(run, :plural), do: if(gossip?(run), do: "Nodes", else: "Teams")
+  defp participant_label(run, :lower_plural), do: if(gossip?(run), do: "nodes", else: "teams")
 
   defp parse_gossip_info(run) do
     if run.config_yaml do

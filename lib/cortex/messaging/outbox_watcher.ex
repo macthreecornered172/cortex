@@ -85,25 +85,29 @@ defmodule Cortex.Messaging.OutboxWatcher do
 
   defp poll_outboxes(state) do
     Enum.reduce(state.team_names, state, fn team_name, acc ->
-      case InboxBridge.read_outbox(acc.workspace_path, team_name) do
-        {:ok, entries} when is_list(entries) ->
-          seen = Map.get(acc.last_counts, team_name, 0)
-          new_entries = Enum.drop(entries, seen)
-
-          Enum.each(new_entries, fn entry ->
-            safe_broadcast(:team_progress, %{
-              run_id: acc.run_id,
-              team_name: team_name,
-              message: entry
-            })
-          end)
-
-          %{acc | last_counts: Map.put(acc.last_counts, team_name, length(entries))}
-
-        _ ->
-          acc
-      end
+      poll_team_outbox(acc, team_name)
     end)
+  end
+
+  defp poll_team_outbox(state, team_name) do
+    case InboxBridge.read_outbox(state.workspace_path, team_name) do
+      {:ok, entries} when is_list(entries) ->
+        seen = Map.get(state.last_counts, team_name, 0)
+        new_entries = Enum.drop(entries, seen)
+
+        Enum.each(new_entries, fn entry ->
+          safe_broadcast(:team_progress, %{
+            run_id: state.run_id,
+            team_name: team_name,
+            message: entry
+          })
+        end)
+
+        %{state | last_counts: Map.put(state.last_counts, team_name, length(entries))}
+
+      _ ->
+        state
+    end
   end
 
   defp safe_subscribe do

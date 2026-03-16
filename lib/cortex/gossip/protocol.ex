@@ -72,38 +72,23 @@ defmodule Cortex.Gossip.Protocol do
         MapSet.new(Map.keys(map_b))
       )
 
-    Enum.reduce(all_ids, {[], []}, fn id, {needed_a, needed_b} ->
-      vc_a = Map.get(map_a, id)
-      vc_b = Map.get(map_b, id)
-
-      case {vc_a, vc_b} do
-        {nil, _vc_b} ->
-          # A doesn't have it, needs it from B
-          {[id | needed_a], needed_b}
-
-        {_vc_a, nil} ->
-          # B doesn't have it, needs it from A
-          {needed_a, [id | needed_b]}
-
-        {vc_a, vc_b} ->
-          case VectorClock.compare(vc_a, vc_b) do
-            :equal ->
-              # Same version, no transfer needed
-              {needed_a, needed_b}
-
-            :before ->
-              # A's version is older, A needs B's version
-              {[id | needed_a], needed_b}
-
-            :after ->
-              # B's version is older, B needs A's version
-              {needed_a, [id | needed_b]}
-
-            :concurrent ->
-              # Both sides should merge -- send to both for tiebreaker resolution
-              {[id | needed_a], [id | needed_b]}
-          end
-      end
+    Enum.reduce(all_ids, {[], []}, fn id, acc ->
+      diff_entry(Map.get(map_a, id), Map.get(map_b, id), id, acc)
     end)
+  end
+
+  defp diff_entry(nil, _vc_b, id, {needed_a, needed_b}),
+    do: {[id | needed_a], needed_b}
+
+  defp diff_entry(_vc_a, nil, id, {needed_a, needed_b}),
+    do: {needed_a, [id | needed_b]}
+
+  defp diff_entry(vc_a, vc_b, id, {needed_a, needed_b}) do
+    case VectorClock.compare(vc_a, vc_b) do
+      :equal -> {needed_a, needed_b}
+      :before -> {[id | needed_a], needed_b}
+      :after -> {needed_a, [id | needed_b]}
+      :concurrent -> {[id | needed_a], [id | needed_b]}
+    end
   end
 end

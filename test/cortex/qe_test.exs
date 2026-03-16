@@ -16,9 +16,9 @@ defmodule Cortex.QETest do
   use ExUnit.Case, async: false
 
   alias Cortex.Agent.Config
+  alias Cortex.Agent.Registry, as: AgentRegistry
   alias Cortex.Agent.Server
   alias Cortex.Agent.Supervisor, as: AgentSupervisor
-  alias Cortex.Agent.Registry, as: AgentRegistry
   alias Cortex.Events
   alias Cortex.Tool.Executor
 

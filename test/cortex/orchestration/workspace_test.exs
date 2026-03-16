@@ -1,11 +1,11 @@
 defmodule Cortex.Orchestration.WorkspaceTest do
   use ExUnit.Case, async: true
 
-  alias Cortex.Orchestration.Workspace
+  alias Cortex.Orchestration.RegistryEntry
+  alias Cortex.Orchestration.RunRegistry
   alias Cortex.Orchestration.State
   alias Cortex.Orchestration.TeamState
-  alias Cortex.Orchestration.RunRegistry
-  alias Cortex.Orchestration.RegistryEntry
+  alias Cortex.Orchestration.Workspace
 
   @moduletag :orchestration
 

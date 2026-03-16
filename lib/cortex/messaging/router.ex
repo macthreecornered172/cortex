@@ -18,9 +18,9 @@ defmodule Cortex.Messaging.Router do
 
   use GenServer
 
+  alias Cortex.Events
   alias Cortex.Messaging.Mailbox
   alias Cortex.Messaging.Message
-  alias Cortex.Events
 
   # --- Client API ---
 

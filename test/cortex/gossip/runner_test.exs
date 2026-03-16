@@ -126,7 +126,7 @@ defmodule Cortex.Gossip.RunnerTest do
       assert result.topology_strategy == :random
       assert result.agent_count == 5
       # With enough rounds and k=3, most/all entries should propagate
-      assert length(result.entries) >= 1
+      assert result.entries != []
     end
 
     test "convergence verification — full mesh converges quickly" do

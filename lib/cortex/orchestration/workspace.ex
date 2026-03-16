@@ -29,10 +29,10 @@ defmodule Cortex.Orchestration.Workspace do
 
   alias Cortex.Messaging.InboxBridge
   alias Cortex.Orchestration.FileUtils
+  alias Cortex.Orchestration.RegistryEntry
+  alias Cortex.Orchestration.RunRegistry
   alias Cortex.Orchestration.State
   alias Cortex.Orchestration.TeamState
-  alias Cortex.Orchestration.RunRegistry
-  alias Cortex.Orchestration.RegistryEntry
   alias Cortex.Orchestration.WorkspaceLock
 
   defstruct [:path]

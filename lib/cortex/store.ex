@@ -11,7 +11,7 @@ defmodule Cortex.Store do
   import Ecto.Query
 
   alias Cortex.Repo
-  alias Cortex.Store.Schemas.{Run, TeamRun, EventLog}
+  alias Cortex.Store.Schemas.{EventLog, Run, TeamRun}
 
   # ── Runs ──────────────────────────────────────────────────────────
 
