@@ -73,7 +73,12 @@ defmodule CortexWeb.RunDetailLive do
         team_runs = safe_get_team_runs(run.id)
         {tiers, edges} = build_dag(run, team_runs)
         team_members = extract_team_members(run)
-        team_names = Enum.map(team_runs, & &1.team_name)
+        internal = Cortex.Store.internal_team_names()
+
+        team_names =
+          team_runs
+          |> Enum.map(& &1.team_name)
+          |> Enum.reject(&(&1 in internal))
 
         coordinator_alive =
           Runner.coordinator_alive?(run.id)
@@ -168,7 +173,10 @@ defmodule CortexWeb.RunDetailLive do
          assign(socket,
            run: updated_run || run,
            team_runs: team_runs,
-           team_names: Enum.map(team_runs, & &1.team_name),
+           team_names:
+             team_runs
+             |> Enum.map(& &1.team_name)
+             |> Enum.reject(&(&1 in Cortex.Store.internal_team_names())),
            tiers: tiers,
            edges: edges,
            coordinator_alive: coordinator_alive,

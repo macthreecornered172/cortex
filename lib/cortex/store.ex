@@ -86,7 +86,9 @@ defmodule Cortex.Store do
   """
   @spec recompute_run_totals(Run.t()) :: {:ok, Run.t()} | {:error, term()}
   def recompute_run_totals(%Run{} = run) do
-    team_runs = get_team_runs(run.id)
+    team_runs =
+      get_team_runs(run.id)
+      |> Enum.reject(fn tr -> tr.team_name in ~w(coordinator summary-agent debug-agent) end)
 
     total_input =
       team_runs
@@ -151,6 +153,10 @@ defmodule Cortex.Store do
   end
 
   @internal_team_names ~w(coordinator summary-agent debug-agent)
+
+  @doc "Returns the list of internal team names (coordinator, summary-agent, debug-agent)."
+  @spec internal_team_names() :: [String.t()]
+  def internal_team_names, do: @internal_team_names
 
   @doc "Gets all internal agent jobs (coordinator, summary-agent, debug-agent) across all runs."
   @spec get_internal_jobs(keyword()) :: [TeamRun.t()]
