@@ -9,6 +9,7 @@ cluster_context: |
 defaults:
   model: haiku
   max_turns: 50
+  permission_mode: bypassPermissions
   timeout_minutes: 5
 
 gossip:

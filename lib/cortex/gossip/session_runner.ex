@@ -141,7 +141,7 @@ defmodule Cortex.Gossip.SessionRunner do
       run_start = System.monotonic_time(:millisecond)
 
       # Step 5: Spawn all agents simultaneously
-      agent_tasks = spawn_all_agents(config, workspace_path, command)
+      agent_tasks = spawn_all_agents(config, workspace_path, command, run_id)
 
       # Step 6: Run exchange rounds (agents are running concurrently)
       run_exchange_loop(config, stores, workspace_path)
@@ -320,33 +320,49 @@ defmodule Cortex.Gossip.SessionRunner do
 
   # -- Agent Spawning ----------------------------------------------------------
 
-  @spec spawn_all_agents(GossipConfig.t(), String.t(), String.t()) :: [
+  @spec spawn_all_agents(GossipConfig.t(), String.t(), String.t(), String.t() | nil) :: [
           {String.t(), Task.t()}
         ]
-  defp spawn_all_agents(config, workspace_path, command) do
+  defp spawn_all_agents(config, workspace_path, command, run_id) do
     Enum.map(config.agents, fn agent ->
       task =
         Task.async(fn ->
-          spawn_agent(agent, config, workspace_path, command)
+          spawn_agent(agent, config, workspace_path, command, run_id)
         end)
 
       {agent.name, task}
     end)
   end
 
-  @spec spawn_agent(
-          GossipConfig.Agent.t(),
-          GossipConfig.t(),
-          String.t(),
-          String.t()
-        ) :: {String.t(), :ok | {:error, term()}, map()}
-  defp spawn_agent(agent, config, workspace_path, command) do
+  defp spawn_agent(agent, config, workspace_path, command, run_id) do
     model = agent.model || config.defaults.model
     prompt = build_agent_prompt(agent, config, workspace_path)
 
     log_dir = Path.join([workspace_path, ".cortex", "logs"])
     File.mkdir_p!(log_dir)
     log_path = Path.join(log_dir, "#{agent.name}.log")
+
+    on_token_update = fn name, tokens ->
+      broadcast(:team_tokens_updated, %{
+        run_id: run_id,
+        team_name: name,
+        input_tokens: tokens.input_tokens,
+        output_tokens: tokens.output_tokens,
+        cache_read_tokens: tokens.cache_read_tokens,
+        cache_creation_tokens: tokens.cache_creation_tokens
+      })
+    end
+
+    on_activity = fn name, activity ->
+      broadcast(:team_activity, %{
+        run_id: run_id,
+        team_name: name,
+        type: Map.get(activity, :type, :unknown),
+        tools: Map.get(activity, :tools, []),
+        details: Map.get(activity, :details, []),
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+      })
+    end
 
     spawner_opts = [
       team_name: agent.name,
@@ -356,7 +372,9 @@ defmodule Cortex.Gossip.SessionRunner do
       permission_mode: config.defaults.permission_mode,
       timeout_minutes: config.defaults.timeout_minutes,
       log_path: log_path,
-      command: command
+      command: command,
+      on_token_update: on_token_update,
+      on_activity: on_activity
     ]
 
     case Spawner.spawn(spawner_opts) do

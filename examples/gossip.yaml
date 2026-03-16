@@ -12,6 +12,7 @@ cluster_context: |
 defaults:
   model: sonnet
   max_turns: 50
+  permission_mode: bypassPermissions
   timeout_minutes: 15
 
 gossip:
