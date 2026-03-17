@@ -1,8 +1,7 @@
 defmodule Cortex.Tool.IntegrationTest do
   use ExUnit.Case, async: true
 
-  alias Cortex.Tool.Shell
-  alias Cortex.Tool.{Executor, Registry}
+  alias Cortex.Tool.{Executor, Registry, Shell}
 
   setup do
     # Start isolated supervisor and registry for each test

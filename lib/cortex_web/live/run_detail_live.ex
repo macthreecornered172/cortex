@@ -594,7 +594,9 @@ defmodule CortexWeb.RunDetailLive do
 
   def handle_event("switch_tab", %{"tab" => "jobs"}, socket) do
     jobs = get_run_jobs(socket.assigns.run)
-    {:noreply, assign(socket, current_tab: "jobs", run_jobs: jobs, selected_run_job: nil, run_job_log: nil)}
+
+    {:noreply,
+     assign(socket, current_tab: "jobs", run_jobs: jobs, selected_run_job: nil, run_job_log: nil)}
   end
 
   def handle_event("select_run_job", %{"id" => job_id}, socket) do
@@ -3447,7 +3449,10 @@ defmodule CortexWeb.RunDetailLive do
 
   defp format_job_datetime(nil), do: "—"
   defp format_job_datetime(%DateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S")
-  defp format_job_datetime(%NaiveDateTime{} = ndt), do: Calendar.strftime(ndt, "%Y-%m-%d %H:%M:%S")
+
+  defp format_job_datetime(%NaiveDateTime{} = ndt),
+    do: Calendar.strftime(ndt, "%Y-%m-%d %H:%M:%S")
+
   defp format_job_datetime(_), do: "—"
 
   defp format_job_duration(nil), do: nil
@@ -3468,15 +3473,17 @@ defmodule CortexWeb.RunDetailLive do
         |> String.split("\n")
         |> Enum.reject(&(&1 == ""))
         |> Enum.take(-@max_job_log_lines)
-        |> Enum.map(fn line ->
-          case Jason.decode(line) do
-            {:ok, %{"type" => type}} -> %{type: type, text: line}
-            _ -> %{type: nil, text: line}
-          end
-        end)
+        |> Enum.map(&classify_log_line/1)
 
       _ ->
         nil
+    end
+  end
+
+  defp classify_log_line(line) do
+    case Jason.decode(line) do
+      {:ok, %{"type" => type}} -> %{type: type, text: line}
+      _ -> %{type: nil, text: line}
     end
   end
 
@@ -3512,17 +3519,25 @@ defmodule CortexWeb.RunDetailLive do
   defp update_summary_job(jobs, job_id, status, error \\ nil, tokens \\ nil) do
     Enum.map(jobs, fn j ->
       if j.id == job_id do
-        j = %{j | status: status, error: error}
-
-        if tokens do
-          %{j | input_tokens: tokens.input, output_tokens: tokens.output}
-        else
-          j
-        end
+        apply_job_update(j, status, error, tokens)
       else
         j
       end
     end)
+  end
+
+  defp apply_job_update(job, status, error, nil) do
+    %{job | status: status, error: error}
+  end
+
+  defp apply_job_update(job, status, error, tokens) do
+    %{
+      job
+      | status: status,
+        error: error,
+        input_tokens: tokens.input,
+        output_tokens: tokens.output
+    }
   end
 
   defp read_coordinator_summaries(run) do

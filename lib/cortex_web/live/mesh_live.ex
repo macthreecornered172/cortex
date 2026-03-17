@@ -851,7 +851,8 @@ defmodule CortexWeb.MeshLive do
         :ok
 
       fresh ->
-        truncated = if String.length(error_msg) > 500, do: String.slice(error_msg, 0, 500), else: error_msg
+        truncated =
+          if String.length(error_msg) > 500, do: String.slice(error_msg, 0, 500), else: error_msg
 
         Cortex.Store.update_run(fresh, %{
           status: "failed",
