@@ -67,19 +67,25 @@ defmodule Cortex.Orchestration.DebugAgent do
 
     case result do
       {:ok, %{result: text, status: :success}} ->
+        filename = save_to_disk(cortex_path, team_name, text)
+
         {:ok,
          %{
            content: text,
            team: team_name,
-           generated_at: DateTime.utc_now() |> DateTime.to_iso8601()
+           generated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+           filename: filename
          }}
 
       {:ok, %{result: text}} ->
+        filename = save_to_disk(cortex_path, team_name, text)
+
         {:ok,
          %{
            content: text,
            team: team_name,
-           generated_at: DateTime.utc_now() |> DateTime.to_iso8601()
+           generated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+           filename: filename
          }}
 
       {:error, reason} ->
@@ -181,5 +187,23 @@ defmodule Cortex.Orchestration.DebugAgent do
       nil -> opts
       cb -> Keyword.put(opts, key, cb)
     end
+  end
+
+  defp save_to_disk(cortex_path, team_name, content) do
+    dir = Path.join(cortex_path, "debug")
+    File.mkdir_p!(dir)
+
+    timestamp =
+      DateTime.utc_now()
+      |> Calendar.strftime("%Y%m%dT%H%M%S")
+
+    filename = "#{timestamp}_debug_#{team_name}.md"
+    path = Path.join(dir, filename)
+    File.write!(path, content)
+    filename
+  rescue
+    e ->
+      Logger.warning("Failed to save debug report to disk: #{inspect(e)}")
+      nil
   end
 end

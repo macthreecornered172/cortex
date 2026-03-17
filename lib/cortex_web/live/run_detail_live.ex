@@ -53,6 +53,8 @@ defmodule CortexWeb.RunDetailLive do
            diagnostics_report: nil,
            debug_report: nil,
            debug_loading: false,
+           debug_reports: [],
+           selected_debug_report: nil,
            coordinator_expanded: false,
            coordinator_log: nil,
            coordinator_inbox: [],
@@ -105,6 +107,8 @@ defmodule CortexWeb.RunDetailLive do
            diagnostics_report: nil,
            debug_report: nil,
            debug_loading: false,
+           debug_reports: read_debug_reports(run),
+           selected_debug_report: nil,
            coordinator_alive: coordinator_alive,
            coordinator_expanded: false,
            coordinator_log: nil,
@@ -488,6 +492,7 @@ defmodule CortexWeb.RunDetailLive do
      |> assign(
        debug_loading: false,
        debug_report: report,
+       debug_reports: read_debug_reports(socket.assigns.run),
        activities: prepend_activity(socket.assigns.activities, entry)
      )
      |> put_flash(:info, "Debug report ready for #{report.team}")}
@@ -1216,6 +1221,11 @@ defmodule CortexWeb.RunDetailLive do
   def handle_event("select_summary", %{"file" => filename}, socket) do
     selected = read_summary_file(socket.assigns.run, filename, nil)
     {:noreply, assign(socket, selected_summary: selected)}
+  end
+
+  def handle_event("select_debug_report", %{"file" => filename}, socket) do
+    selected = read_debug_file(socket.assigns.run, filename)
+    {:noreply, assign(socket, selected_debug_report: selected)}
   end
 
   def handle_event("form_update", params, socket) do
@@ -2096,7 +2106,7 @@ defmodule CortexWeb.RunDetailLive do
                       )
                     ]}
                   >
-                    {file}
+                    {pretty_filename(file)}
                   </button>
                 </div>
                 <div :if={@selected_summary} class="bg-gray-950 rounded p-4 max-h-[60vh] overflow-y-auto">
@@ -2300,6 +2310,35 @@ defmodule CortexWeb.RunDetailLive do
           <% else %>
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
               <p class="text-gray-500 text-sm">Select a {participant_label(@run, :singular)} to view diagnostics.</p>
+            </div>
+          <% end %>
+
+          <!-- Previous Debug Reports -->
+          <%= if @debug_reports != [] do %>
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mt-4">
+              <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
+                Previous Debug Reports
+                <span class="text-xs text-gray-600 normal-case ml-2">({length(@debug_reports)})</span>
+              </h3>
+              <div class="flex flex-wrap gap-2 mb-3">
+                <button
+                  :for={file <- @debug_reports}
+                  phx-click="select_debug_report"
+                  phx-value-file={file}
+                  class={[
+                    "text-xs px-3 py-1.5 rounded border transition-colors",
+                    if(@selected_debug_report && @selected_debug_report.name == file,
+                      do: "border-red-500 text-red-300 bg-red-900/30",
+                      else: "border-gray-700 text-gray-400 hover:text-gray-300 hover:border-gray-500"
+                    )
+                  ]}
+                >
+                  {pretty_filename(file)}
+                </button>
+              </div>
+              <div :if={@selected_debug_report} class="bg-gray-950 rounded p-4 max-h-[60vh] overflow-y-auto">
+                <pre class="text-gray-300 text-sm font-mono whitespace-pre-wrap overflow-x-auto">{@selected_debug_report.content}</pre>
+              </div>
             </div>
           <% end %>
         <% else %>
@@ -3242,6 +3281,72 @@ defmodule CortexWeb.RunDetailLive do
       []
     end
   end
+
+  defp read_debug_reports(run) do
+    if run && run.workspace_path do
+      dir = Path.join([run.workspace_path, ".cortex", "debug"])
+
+      case File.ls(dir) do
+        {:ok, files} ->
+          files
+          |> Enum.filter(&String.ends_with?(&1, ".md"))
+          |> Enum.sort(:desc)
+
+        _ ->
+          []
+      end
+    else
+      []
+    end
+  end
+
+  defp read_debug_file(run, filename) do
+    if run && run.workspace_path do
+      path = Path.join([run.workspace_path, ".cortex", "debug", filename])
+
+      case File.read(path) do
+        {:ok, data} -> %{name: filename, content: data}
+        _ -> nil
+      end
+    else
+      nil
+    end
+  end
+
+  defp pretty_filename(filename) do
+    # Parse: 20260317T051112_debug_agent-a.md or 20260317T051112_ai_summary.md
+    case Regex.run(~r/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})_(.+)\.md$/, filename) do
+      [_, _y, month, day, hour, min, _sec, label] ->
+        month_name = month_abbrev(month)
+        pretty_label = label |> String.replace("_", " ") |> String.replace("-", " ")
+
+        pretty_label =
+          pretty_label
+          |> String.replace("ai summary", "AI Summary")
+          |> String.replace(~r/^debug /, "Debug: ")
+          |> String.replace(~r/^mesh complete$/, "Mesh Complete")
+          |> String.replace(~r/^dag complete$/, "DAG Complete")
+
+        "#{pretty_label} — #{month_name} #{day}, #{hour}:#{min}"
+
+      _ ->
+        filename
+    end
+  end
+
+  defp month_abbrev("01"), do: "Jan"
+  defp month_abbrev("02"), do: "Feb"
+  defp month_abbrev("03"), do: "Mar"
+  defp month_abbrev("04"), do: "Apr"
+  defp month_abbrev("05"), do: "May"
+  defp month_abbrev("06"), do: "Jun"
+  defp month_abbrev("07"), do: "Jul"
+  defp month_abbrev("08"), do: "Aug"
+  defp month_abbrev("09"), do: "Sep"
+  defp month_abbrev("10"), do: "Oct"
+  defp month_abbrev("11"), do: "Nov"
+  defp month_abbrev("12"), do: "Dec"
+  defp month_abbrev(_), do: "?"
 
   defp parse_log_file(log_path) do
     case File.read(log_path) do
