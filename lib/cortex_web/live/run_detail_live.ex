@@ -3,15 +3,15 @@ defmodule CortexWeb.RunDetailLive do
 
   import CortexWeb.DAGComponents
 
+  alias Cortex.InternalAgent.Debug
+  alias Cortex.InternalAgent.Summary
   alias Cortex.Messaging.InboxBridge
   alias Cortex.Orchestration.Config.Loader, as: ConfigLoader
   alias Cortex.Orchestration.DAG
-  alias Cortex.Orchestration.DebugAgent
   alias Cortex.Orchestration.Injection
   alias Cortex.Orchestration.LogParser
   alias Cortex.Orchestration.Runner
   alias Cortex.Orchestration.Spawner
-  alias Cortex.Orchestration.SummaryAgent
   alias Cortex.Orchestration.Workspace
 
   require Logger
@@ -755,7 +755,7 @@ defmodule CortexWeb.RunDetailLive do
         Task.start(fn ->
           result =
             try do
-              DebugAgent.analyze(run.workspace_path, team_name,
+              Debug.analyze(run.workspace_path, team_name,
                 run_name: run.name || "Untitled",
                 on_activity: on_activity
               )
@@ -1206,7 +1206,7 @@ defmodule CortexWeb.RunDetailLive do
         Task.start(fn ->
           result =
             try do
-              SummaryAgent.generate(workspace_path,
+              Summary.generate(workspace_path,
                 run_name: run.name || "Untitled",
                 on_activity: on_activity,
                 on_token_update: on_token_update
@@ -2880,7 +2880,7 @@ defmodule CortexWeb.RunDetailLive do
 
   defp start_gossip_coordinator(socket, run) do
     alias Cortex.Gossip.Config.Loader, as: GossipLoader
-    alias Cortex.Gossip.CoordinatorPrompt
+    alias Cortex.Gossip.Coordinator.Prompt, as: GossipCoordPrompt
 
     case GossipLoader.load_string(run.config_yaml) do
       {:ok, gossip_config} ->
@@ -2890,7 +2890,7 @@ defmodule CortexWeb.RunDetailLive do
 
         InboxBridge.setup(workspace_path, ["coordinator"])
 
-        prompt = CoordinatorPrompt.build(gossip_config, workspace_path)
+        prompt = GossipCoordPrompt.build(gossip_config, workspace_path)
         log_path = Path.join([cortex_path, "logs", "coordinator.log"])
 
         callbacks = build_coordinator_callbacks(run_id, cortex_path)

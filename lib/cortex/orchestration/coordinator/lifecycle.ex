@@ -1,4 +1,4 @@
-defmodule Cortex.Coordinator.Lifecycle do
+defmodule Cortex.Orchestration.Coordinator.Lifecycle do
   @moduledoc """
   Manages the spawn/stop lifecycle of the orchestration coordinator agent.
 
@@ -7,10 +7,11 @@ defmodule Cortex.Coordinator.Lifecycle do
   stopped (with a graceful yield then brutal kill) after all tiers complete.
   """
 
-  alias Cortex.Coordinator.Config, as: CoordConfig
-  alias Cortex.Coordinator.Prompt
+  alias Cortex.InternalAgent.Launcher
+  alias Cortex.InternalAgent.SpawnConfig
   alias Cortex.Orchestration.Config
-  alias Cortex.Orchestration.Spawner
+  alias Cortex.Orchestration.Coordinator.Config, as: CoordConfig
+  alias Cortex.Orchestration.Coordinator.Prompt
   alias Cortex.Orchestration.Workspace
 
   require Logger
@@ -18,8 +19,8 @@ defmodule Cortex.Coordinator.Lifecycle do
   @doc """
   Spawns the coordinator agent as an async Task.
 
-  Builds the coordinator prompt, sets up spawner options using coordinator
-  defaults, and returns a `Task.t()` that wraps the `Spawner.spawn/1` call.
+  Builds the coordinator prompt, sets up a `%SpawnConfig{}`, and
+  delegates to `Launcher.run_async/1`.
 
   ## Parameters
 
@@ -64,7 +65,7 @@ defmodule Cortex.Coordinator.Lifecycle do
       })
     end
 
-    spawner_opts = [
+    spawn_config = %SpawnConfig{
       team_name: CoordConfig.name(),
       prompt: prompt,
       model: CoordConfig.model(),
@@ -78,15 +79,9 @@ defmodule Cortex.Coordinator.Lifecycle do
       on_token_update: on_token_update,
       on_activity: on_activity,
       on_port_opened: fn _name, _pid -> :ok end
-    ]
+    }
 
-    Task.async(fn ->
-      Spawner.spawn(spawner_opts)
-    end)
-  rescue
-    e ->
-      Logger.warning("Failed to spawn coordinator agent: #{inspect(e)}")
-      nil
+    Launcher.run_async(spawn_config)
   end
 
   @doc """
@@ -96,16 +91,5 @@ defmodule Cortex.Coordinator.Lifecycle do
   Safe to call with `nil` (no-op).
   """
   @spec stop(Task.t() | nil) :: :ok
-  def stop(nil), do: :ok
-
-  def stop(task) do
-    case Task.yield(task, 5_000) do
-      {:ok, _result} -> :ok
-      nil -> Task.shutdown(task, :brutal_kill)
-    end
-
-    :ok
-  rescue
-    _ -> :ok
-  end
+  def stop(task), do: Launcher.stop(task)
 end

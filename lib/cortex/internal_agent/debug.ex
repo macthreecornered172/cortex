@@ -1,4 +1,4 @@
-defmodule Cortex.Orchestration.DebugAgent do
+defmodule Cortex.InternalAgent.Debug do
   @moduledoc """
   Spawns a short-lived `claude -p` agent to produce a root cause analysis
   for a failed or stalled team.
@@ -9,11 +9,12 @@ defmodule Cortex.Orchestration.DebugAgent do
 
   ## Usage
 
-      DebugAgent.analyze("/path/to/project", "team-name", run_name: "my-run")
+      Debug.analyze("/path/to/project", "team-name", run_name: "my-run")
       #=> {:ok, %{content: "...", team: "...", generated_at: "..."}}
   """
 
-  alias Cortex.Orchestration.Spawner
+  alias Cortex.InternalAgent.Launcher
+  alias Cortex.InternalAgent.SpawnConfig
 
   require Logger
 
@@ -46,7 +47,7 @@ defmodule Cortex.Orchestration.DebugAgent do
     context = gather_context(cortex_path, team_name)
     prompt = build_prompt(run_name, team_name, context)
 
-    spawn_opts = [
+    config = %SpawnConfig{
       team_name: "debug-agent",
       prompt: prompt,
       model: "haiku",
@@ -55,17 +56,12 @@ defmodule Cortex.Orchestration.DebugAgent do
       timeout_minutes: 2,
       command: Keyword.get(opts, :command, "claude"),
       cwd: workspace_path,
-      log_path: log_path
-    ]
+      log_path: log_path,
+      on_activity: Keyword.get(opts, :on_activity),
+      on_token_update: Keyword.get(opts, :on_token_update)
+    }
 
-    spawn_opts =
-      spawn_opts
-      |> maybe_add_callback(:on_activity, opts)
-      |> maybe_add_callback(:on_token_update, opts)
-
-    result = Spawner.spawn(spawn_opts)
-
-    case result do
+    case Launcher.run(config) do
       {:ok, %{result: text, status: :success}} ->
         filename = save_to_disk(cortex_path, team_name, text)
 
@@ -180,13 +176,6 @@ defmodule Cortex.Orchestration.DebugAgent do
     end
   rescue
     _ -> nil
-  end
-
-  defp maybe_add_callback(opts, key, source_opts) do
-    case Keyword.get(source_opts, key) do
-      nil -> opts
-      cb -> Keyword.put(opts, key, cb)
-    end
   end
 
   defp save_to_disk(cortex_path, team_name, content) do

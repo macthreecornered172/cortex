@@ -9,9 +9,9 @@ defmodule Cortex.Orchestration.Injection do
   a "Your Team" section describing the available teammates.
   """
 
-  alias Cortex.Coordinator.Prompt, as: CoordinatorPrompt
   alias Cortex.Orchestration.Config
   alias Cortex.Orchestration.Config.{Defaults, Team}
+  alias Cortex.Orchestration.Coordinator.Prompt, as: CoordinatorPrompt
   alias Cortex.Orchestration.State
 
   @doc """

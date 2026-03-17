@@ -1,4 +1,4 @@
-defmodule Cortex.Orchestration.SummaryAgent do
+defmodule Cortex.InternalAgent.Summary do
   @moduledoc """
   Spawns a short-lived `claude -p` agent to produce an AI-generated run summary.
 
@@ -8,14 +8,15 @@ defmodule Cortex.Orchestration.SummaryAgent do
 
   ## Usage
 
-      SummaryAgent.generate("/path/to/project", run_name: "my-run")
+      Summary.generate("/path/to/project", run_name: "my-run")
       #=> {:ok, %{content: "...", generated_at: "...", filename: "..."}}
 
   The summary is also saved to `.cortex/summaries/` on disk so the
   dashboard can display it alongside any coordinator-generated summaries.
   """
 
-  alias Cortex.Orchestration.Spawner
+  alias Cortex.InternalAgent.Launcher
+  alias Cortex.InternalAgent.SpawnConfig
 
   require Logger
 
@@ -49,7 +50,7 @@ defmodule Cortex.Orchestration.SummaryAgent do
     context = gather_context(cortex_path)
     prompt = build_prompt(run_name, context)
 
-    spawn_opts = [
+    config = %SpawnConfig{
       team_name: "summary-agent",
       prompt: prompt,
       model: "haiku",
@@ -58,17 +59,12 @@ defmodule Cortex.Orchestration.SummaryAgent do
       timeout_minutes: 2,
       command: Keyword.get(opts, :command, "claude"),
       cwd: workspace_path,
-      log_path: log_path
-    ]
+      log_path: log_path,
+      on_activity: Keyword.get(opts, :on_activity),
+      on_token_update: Keyword.get(opts, :on_token_update)
+    }
 
-    spawn_opts =
-      spawn_opts
-      |> maybe_add_callback(:on_activity, opts)
-      |> maybe_add_callback(:on_token_update, opts)
-
-    result = Spawner.spawn(spawn_opts)
-
-    case result do
+    case Launcher.run(config) do
       {:ok, %{result: text, status: :success}} ->
         filename = save_to_disk(cortex_path, text)
 
@@ -174,13 +170,6 @@ defmodule Cortex.Orchestration.SummaryAgent do
   end
 
   # -- Persistence --
-
-  defp maybe_add_callback(opts, key, source_opts) do
-    case Keyword.get(source_opts, key) do
-      nil -> opts
-      cb -> Keyword.put(opts, key, cb)
-    end
-  end
 
   defp save_to_disk(cortex_path, content) do
     dir = Path.join(cortex_path, "summaries")

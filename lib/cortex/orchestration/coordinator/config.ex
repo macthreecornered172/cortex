@@ -1,4 +1,4 @@
-defmodule Cortex.Coordinator.Config do
+defmodule Cortex.Orchestration.Coordinator.Config do
   @moduledoc """
   Configuration constants for the orchestration coordinator agent.
 

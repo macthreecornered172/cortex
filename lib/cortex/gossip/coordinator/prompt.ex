@@ -1,4 +1,4 @@
-defmodule Cortex.Gossip.CoordinatorPrompt do
+defmodule Cortex.Gossip.Coordinator.Prompt do
   @moduledoc """
   Builds the prompt for a gossip-mode coordinator agent.
 

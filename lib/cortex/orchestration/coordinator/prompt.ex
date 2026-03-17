@@ -1,4 +1,4 @@
-defmodule Cortex.Coordinator.Prompt do
+defmodule Cortex.Orchestration.Coordinator.Prompt do
   @moduledoc """
   Builds the system prompt for the orchestration coordinator agent.
 

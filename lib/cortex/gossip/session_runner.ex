@@ -29,7 +29,7 @@ defmodule Cortex.Gossip.SessionRunner do
 
   alias Cortex.Gossip.Config, as: GossipConfig
   alias Cortex.Gossip.Config.Loader
-  alias Cortex.Gossip.CoordinatorPrompt
+  alias Cortex.Gossip.Coordinator.Lifecycle, as: CoordLifecycle
   alias Cortex.Gossip.Entry
   alias Cortex.Gossip.KnowledgeStore
   alias Cortex.Gossip.Protocol
@@ -152,7 +152,7 @@ defmodule Cortex.Gossip.SessionRunner do
       # Step 5b: Spawn coordinator if enabled
       coordinator_task =
         if coordinator? do
-          spawn_coordinator(config, workspace_path, command, run_id)
+          CoordLifecycle.spawn(config, workspace_path, command, run_id)
         end
 
       # Step 6: Run exchange rounds (agents are running concurrently)
@@ -166,7 +166,7 @@ defmodule Cortex.Gossip.SessionRunner do
       results = await_agents(agent_tasks, wrap_up_ms)
 
       # Stop coordinator (it runs for the session duration)
-      if coordinator_task, do: stop_coordinator_task(coordinator_task)
+      if coordinator_task, do: CoordLifecycle.stop(coordinator_task)
 
       run_duration = System.monotonic_time(:millisecond) - run_start
 
@@ -758,82 +758,6 @@ defmodule Cortex.Gossip.SessionRunner do
     end)
   end
 
-  # -- Coordinator Spawning & Communication -------------------------------------
-
-  @spec spawn_coordinator(GossipConfig.t(), String.t(), String.t(), String.t() | nil) :: Task.t()
-  defp spawn_coordinator(config, workspace_path, command, run_id) do
-    prompt = CoordinatorPrompt.build(config, workspace_path)
-    log_dir = Path.join([workspace_path, ".cortex", "logs"])
-    File.mkdir_p!(log_dir)
-    log_path = Path.join(log_dir, "coordinator.log")
-
-    create_coordinator_team_run(run_id, prompt, log_path)
-
-    on_token_update = fn name, tokens ->
-      broadcast(:team_tokens_updated, %{
-        run_id: run_id,
-        team_name: name,
-        input_tokens: tokens.input_tokens,
-        output_tokens: tokens.output_tokens,
-        cache_read_tokens: tokens.cache_read_tokens,
-        cache_creation_tokens: tokens.cache_creation_tokens
-      })
-    end
-
-    on_activity = fn name, activity ->
-      broadcast(:team_activity, %{
-        run_id: run_id,
-        team_name: name,
-        type: Map.get(activity, :type, :unknown),
-        tools: Map.get(activity, :tools, []),
-        details: Map.get(activity, :details, []),
-        timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
-      })
-    end
-
-    Task.async(fn ->
-      if run_id do
-        Registry.register(
-          Cortex.Orchestration.RunnerRegistry,
-          {:coordinator, run_id},
-          %{started_at: DateTime.utc_now()}
-        )
-      end
-
-      Spawner.spawn(
-        team_name: "coordinator",
-        prompt: prompt,
-        model: "haiku",
-        max_turns: 500,
-        permission_mode: "bypassPermissions",
-        timeout_minutes: config.defaults.timeout_minutes,
-        log_path: log_path,
-        command: command,
-        on_token_update: on_token_update,
-        on_activity: on_activity
-      )
-    end)
-  end
-
-  @spec create_coordinator_team_run(String.t() | nil, String.t(), String.t()) :: :ok
-  defp create_coordinator_team_run(nil, _prompt, _log_path), do: :ok
-
-  defp create_coordinator_team_run(run_id, prompt, log_path) do
-    Cortex.Store.upsert_internal_team_run(%{
-      run_id: run_id,
-      team_name: "coordinator",
-      role: "Gossip Coordinator",
-      tier: -1,
-      internal: true,
-      status: "running",
-      prompt: prompt,
-      log_path: log_path,
-      started_at: DateTime.utc_now()
-    })
-  rescue
-    _ -> :ok
-  end
-
   defp persist_gossip_rounds(nil, _current, _total), do: :ok
 
   defp persist_gossip_rounds(run_id, current, total) do
@@ -847,18 +771,6 @@ defmodule Cortex.Gossip.SessionRunner do
           gossip_rounds_total: total
         })
     end
-  rescue
-    _ -> :ok
-  end
-
-  @spec stop_coordinator_task(Task.t()) :: :ok
-  defp stop_coordinator_task(task) do
-    case Task.yield(task, 5_000) do
-      {:ok, _result} -> :ok
-      nil -> Task.shutdown(task, :brutal_kill)
-    end
-
-    :ok
   rescue
     _ -> :ok
   end

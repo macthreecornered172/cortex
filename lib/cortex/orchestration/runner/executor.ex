@@ -13,11 +13,11 @@ defmodule Cortex.Orchestration.Runner.Executor do
   produce empty tiers.
   """
 
-  alias Cortex.Coordinator.Config, as: CoordConfig
-  alias Cortex.Coordinator.Lifecycle, as: CoordLifecycle
   alias Cortex.Messaging.InboxBridge
   alias Cortex.Messaging.OutboxWatcher
   alias Cortex.Orchestration.Config
+  alias Cortex.Orchestration.Coordinator.Config, as: CoordConfig
+  alias Cortex.Orchestration.Coordinator.Lifecycle, as: CoordLifecycle
   alias Cortex.Orchestration.Injection
   alias Cortex.Orchestration.Runner.Outcomes
   alias Cortex.Orchestration.Runner.Store, as: RunnerStore
