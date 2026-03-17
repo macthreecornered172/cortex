@@ -109,8 +109,10 @@ defmodule CortexWeb.JobsLive do
                     <span class={["text-xs font-medium px-2 py-0.5 rounded", status_badge_class(job.status)]}>
                       {job.status}
                     </span>
-                    <span class="font-medium text-white text-sm">Tool: {job_type_label(job.team_name)}</span>
-                    <span :if={job_target(job)} class="text-gray-400 text-sm">— {job_target(job)}</span>
+                    <span class="text-sm">
+                      <span class="font-medium text-white">{job_type_label(job.team_name)}</span>
+                      <span :if={job_target(job)} class="text-gray-400"> ({job_target(job)})</span>
+                    </span>
                   </div>
                   <span class="text-xs text-gray-500">{format_datetime(job.started_at)}</span>
                 </div>
