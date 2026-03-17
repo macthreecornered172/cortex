@@ -1,7 +1,7 @@
 defmodule Cortex.Tool.IntegrationTest do
   use ExUnit.Case, async: true
 
-  alias Cortex.Tool.Builtin.Shell
+  alias Cortex.Tool.Shell
   alias Cortex.Tool.{Executor, Registry}
 
   setup do

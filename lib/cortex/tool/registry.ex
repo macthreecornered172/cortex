@@ -19,7 +19,7 @@ defmodule Cortex.Tool.Registry do
 
   ## Usage
 
-      Cortex.Tool.Registry.register(Cortex.Tool.Builtin.Shell)
+      Cortex.Tool.Registry.register(Cortex.Tool.Shell)
       {:ok, module} = Cortex.Tool.Registry.lookup("shell")
       modules = Cortex.Tool.Registry.list()
   """

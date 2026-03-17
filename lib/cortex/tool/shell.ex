@@ -1,6 +1,6 @@
-defmodule Cortex.Tool.Builtin.Shell do
+defmodule Cortex.Tool.Shell do
   @moduledoc """
-  Built-in shell command execution tool.
+  Shell command execution tool.
 
   Implements `Cortex.Tool.Behaviour` to provide safe, sandboxed shell command
   execution with:
@@ -16,13 +16,13 @@ defmodule Cortex.Tool.Builtin.Shell do
   ## Configuration
 
       # config/config.exs
-      config :cortex, Cortex.Tool.Builtin.Shell,
+      config :cortex, Cortex.Tool.Shell,
         allowed_commands: ["ls", "cat", "echo", "wc", "head", "tail", "grep", "find", "pwd", "date"],
         max_output_bytes: 65_536
 
   ## Usage via Executor
 
-      Cortex.Tool.Executor.run(Cortex.Tool.Builtin.Shell, %{
+      Cortex.Tool.Executor.run(Cortex.Tool.Shell, %{
         "command" => "ls",
         "args" => ["-la", "/tmp"]
       })

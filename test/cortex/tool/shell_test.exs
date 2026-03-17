@@ -1,7 +1,7 @@
-defmodule Cortex.Tool.Builtin.ShellTest do
+defmodule Cortex.Tool.ShellTest do
   use ExUnit.Case, async: true
 
-  alias Cortex.Tool.Builtin.Shell
+  alias Cortex.Tool.Shell
 
   describe "behaviour compliance" do
     test "name/0 returns 'shell'" do
@@ -98,14 +98,9 @@ defmodule Cortex.Tool.Builtin.ShellTest do
 
   describe "output truncation" do
     test "output exceeding max_output_bytes is truncated" do
-      # Generate output larger than default 64KB
-      # Each echo line is about 100 chars, so 1000 repetitions should exceed 64KB
-      # Use a more reliable approach: generate lots of output via wc counting a big echo
-      # Actually, let's just test the truncation logic by using a small max via config
-
       # Temporarily set a small max output
-      original = Application.get_env(:cortex, Cortex.Tool.Builtin.Shell)
-      Application.put_env(:cortex, Cortex.Tool.Builtin.Shell, max_output_bytes: 10)
+      original = Application.get_env(:cortex, Cortex.Tool.Shell)
+      Application.put_env(:cortex, Cortex.Tool.Shell, max_output_bytes: 10)
 
       try do
         {:ok, output} =
@@ -118,9 +113,9 @@ defmodule Cortex.Tool.Builtin.ShellTest do
       after
         # Restore original config
         if original do
-          Application.put_env(:cortex, Cortex.Tool.Builtin.Shell, original)
+          Application.put_env(:cortex, Cortex.Tool.Shell, original)
         else
-          Application.delete_env(:cortex, Cortex.Tool.Builtin.Shell)
+          Application.delete_env(:cortex, Cortex.Tool.Shell)
         end
       end
     end
