@@ -437,6 +437,7 @@ defmodule CortexWeb.RunDetailLive do
 
   def handle_info({:ai_summary_result, job_id, {:ok, summary}}, socket) do
     summaries = read_coordinator_summaries(socket.assigns.run)
+    tokens = lookup_internal_tokens(socket.assigns.run, "summary-agent")
 
     entry = %{
       team: "system",
@@ -445,7 +446,7 @@ defmodule CortexWeb.RunDetailLive do
       at: format_now()
     }
 
-    jobs = update_summary_job(socket.assigns.summary_jobs, job_id, :completed)
+    jobs = update_summary_job(socket.assigns.summary_jobs, job_id, :completed, nil, tokens)
 
     {:noreply,
      socket
@@ -1198,7 +1199,9 @@ defmodule CortexWeb.RunDetailLive do
           type: :ai_summary,
           status: :running,
           started_at: DateTime.utc_now(),
-          error: nil
+          error: nil,
+          input_tokens: nil,
+          output_tokens: nil
         }
 
         entry = %{
@@ -1627,15 +1630,16 @@ defmodule CortexWeb.RunDetailLive do
           <% end %>
 
           <!-- Node/Agent Cards -->
+          <% visible_runs = Enum.reject(@team_runs, & &1.internal) %>
           <h2 class="text-lg font-semibold text-white mb-4">{participant_label(@run, :plural)}</h2>
-          <%= if @team_runs == [] do %>
+          <%= if visible_runs == [] do %>
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
               <p class="text-gray-400">No {participant_label(@run, :lower_plural)} recorded for this run.</p>
             </div>
           <% else %>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <a
-                :for={team <- @team_runs}
+                :for={team <- visible_runs}
                 href={"/runs/#{@run.id}/teams/#{team.team_name}"}
                 class="bg-gray-900 rounded-lg border border-purple-900/30 p-4 hover:border-purple-700/50 transition-colors block"
               >
@@ -1674,15 +1678,16 @@ defmodule CortexWeb.RunDetailLive do
           <% end %>
 
           <!-- Team Cards -->
+          <% dag_visible_runs = Enum.reject(@team_runs, & &1.internal) %>
           <h2 class="text-lg font-semibold text-white mb-4">Teams</h2>
-          <%= if @team_runs == [] do %>
+          <%= if dag_visible_runs == [] do %>
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
               <p class="text-gray-400">No teams recorded for this run.</p>
             </div>
           <% else %>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <a
-                :for={team <- @team_runs}
+                :for={team <- dag_visible_runs}
                 href={"/runs/#{@run.id}/teams/#{team.team_name}"}
                 class="bg-gray-900 rounded-lg border border-gray-800 p-4 hover:border-gray-600 transition-colors block"
               >
@@ -2064,6 +2069,9 @@ defmodule CortexWeb.RunDetailLive do
                       <span :if={job.status == :running} class="text-gray-500 text-xs">{elapsed_since(job.started_at)}</span>
                     </div>
                     <div class="flex items-center gap-3 text-xs">
+                      <span :if={job.input_tokens} class="text-cortex-400">
+                        <.token_display input={job.input_tokens} output={job.output_tokens} />
+                      </span>
                       <span class="text-gray-600">{Calendar.strftime(job.started_at, "%H:%M:%S")}</span>
                       <button
                         :if={job.status != :running}
@@ -3250,14 +3258,37 @@ defmodule CortexWeb.RunDetailLive do
   defp job_label(:failed), do: "Failed"
   defp job_label(_), do: "Unknown"
 
+  defp lookup_internal_tokens(run, team_name) do
+    if run do
+      case Cortex.Store.get_team_run(run.id, team_name) do
+        %{input_tokens: input, output_tokens: output}
+        when not is_nil(input) or not is_nil(output) ->
+          %{input: input || 0, output: output || 0}
+
+        _ ->
+          nil
+      end
+    else
+      nil
+    end
+  rescue
+    _ -> nil
+  end
+
   defp has_running_summary_job?(jobs) do
     Enum.any?(jobs, fn j -> j.status == :running end)
   end
 
-  defp update_summary_job(jobs, job_id, status, error \\ nil) do
+  defp update_summary_job(jobs, job_id, status, error \\ nil, tokens \\ nil) do
     Enum.map(jobs, fn j ->
       if j.id == job_id do
-        %{j | status: status, error: error}
+        j = %{j | status: status, error: error}
+
+        if tokens do
+          %{j | input_tokens: tokens.input, output_tokens: tokens.output}
+        else
+          j
+        end
       else
         j
       end
