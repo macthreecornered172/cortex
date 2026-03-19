@@ -291,6 +291,73 @@ defmodule Cortex.Gossip.Config.LoaderTest do
     end
   end
 
+  describe "provider/backend defaults parsing" do
+    test "parses provider and backend from defaults" do
+      yaml = """
+      name: test
+      mode: gossip
+      defaults:
+        provider: http
+        backend: docker
+      agents:
+        - name: a
+          topic: t
+          prompt: p
+      """
+
+      {:ok, config} = Loader.load_string(yaml)
+      assert config.defaults.provider == :http
+      assert config.defaults.backend == :docker
+    end
+
+    test "defaults to :cli/:local when provider/backend are omitted" do
+      yaml = """
+      name: test
+      mode: gossip
+      agents:
+        - name: a
+          topic: t
+          prompt: p
+      """
+
+      {:ok, config} = Loader.load_string(yaml)
+      assert config.defaults.provider == :cli
+      assert config.defaults.backend == :local
+    end
+
+    test "unknown provider string falls back to :cli default" do
+      yaml = """
+      name: test
+      mode: gossip
+      defaults:
+        provider: openai
+      agents:
+        - name: a
+          topic: t
+          prompt: p
+      """
+
+      {:ok, config} = Loader.load_string(yaml)
+      assert config.defaults.provider == :cli
+    end
+
+    test "parses k8s backend" do
+      yaml = """
+      name: test
+      mode: gossip
+      defaults:
+        backend: k8s
+      agents:
+        - name: a
+          topic: t
+          prompt: p
+      """
+
+      {:ok, config} = Loader.load_string(yaml)
+      assert config.defaults.backend == :k8s
+    end
+  end
+
   describe "load/1 with file" do
     @tag :tmp_dir
     test "loads from file", %{tmp_dir: tmp_dir} do

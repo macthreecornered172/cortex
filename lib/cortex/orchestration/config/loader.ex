@@ -87,7 +87,9 @@ defmodule Cortex.Orchestration.Config.Loader do
       model: Map.get(raw, "model", "sonnet"),
       max_turns: Map.get(raw, "max_turns", 200),
       permission_mode: Map.get(raw, "permission_mode", "acceptEdits"),
-      timeout_minutes: Map.get(raw, "timeout_minutes", 30)
+      timeout_minutes: Map.get(raw, "timeout_minutes", 30),
+      provider: parse_provider(Map.get(raw, "provider")) || :cli,
+      backend: parse_backend(Map.get(raw, "backend")) || :local
     }
   end
 
@@ -104,7 +106,9 @@ defmodule Cortex.Orchestration.Config.Loader do
       members: build_members(Map.get(raw, "members")),
       tasks: build_tasks(Map.get(raw, "tasks")),
       depends_on: Map.get(raw, "depends_on") || [],
-      context: Map.get(raw, "context")
+      context: Map.get(raw, "context"),
+      provider: parse_provider(Map.get(raw, "provider")),
+      backend: parse_backend(Map.get(raw, "backend"))
     }
   end
 
@@ -148,4 +152,18 @@ defmodule Cortex.Orchestration.Config.Loader do
   end
 
   defp build_task(_), do: %Task{summary: ""}
+
+  # Safe string-to-atom conversion for provider field.
+  # Returns nil for unknown values; the validator catches them.
+  defp parse_provider("cli"), do: :cli
+  defp parse_provider("http"), do: :http
+  defp parse_provider("external"), do: :external
+  defp parse_provider(_), do: nil
+
+  # Safe string-to-atom conversion for backend field.
+  # Returns nil for unknown values; the validator catches them.
+  defp parse_backend("local"), do: :local
+  defp parse_backend("docker"), do: :docker
+  defp parse_backend("k8s"), do: :k8s
+  defp parse_backend(_), do: nil
 end

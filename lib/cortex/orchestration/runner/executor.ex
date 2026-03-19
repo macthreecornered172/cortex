@@ -21,10 +21,10 @@ defmodule Cortex.Orchestration.Runner.Executor do
   alias Cortex.Orchestration.Injection
   alias Cortex.Orchestration.Runner.Outcomes
   alias Cortex.Orchestration.Runner.Store, as: RunnerStore
-  alias Cortex.Orchestration.Spawner
   alias Cortex.Orchestration.Summary
   alias Cortex.Orchestration.TeamResult
   alias Cortex.Orchestration.Workspace
+  alias Cortex.Provider.Resolver, as: ProviderResolver
   alias Cortex.Store.Schemas.TeamRun, as: TeamRunSchema
   alias Cortex.Telemetry, as: Tel
 
@@ -449,27 +449,40 @@ defmodule Cortex.Orchestration.Runner.Executor do
       end
     end
 
-    spawner_opts = [
+    provider_mod = ProviderResolver.resolve!(team, config.defaults)
+
+    provider_config = %{
+      command: command,
+      cwd: workspace.path
+    }
+
+    run_opts = [
       team_name: team_name,
-      prompt: prompt,
       model: model,
       max_turns: max_turns,
       permission_mode: permission_mode,
       timeout_minutes: timeout_minutes,
       log_path: log_path,
-      command: command,
-      cwd: workspace.path,
       on_token_update: on_token_update,
       on_activity: on_activity,
       on_port_opened: on_port_opened
     ]
 
-    case Spawner.spawn(spawner_opts) do
-      {:ok, %TeamResult{status: :success} = result} ->
-        {team_name, :ok, %{type: :success, result: result}}
+    result =
+      with {:ok, handle} <- provider_mod.start(provider_config) do
+        try do
+          provider_mod.run(handle, prompt, run_opts)
+        after
+          provider_mod.stop(handle)
+        end
+      end
 
-      {:ok, %TeamResult{} = result} ->
-        {team_name, {:error, result.status}, %{type: :failure, result: result}}
+    case result do
+      {:ok, %TeamResult{status: :success} = team_result} ->
+        {team_name, :ok, %{type: :success, result: team_result}}
+
+      {:ok, %TeamResult{} = team_result} ->
+        {team_name, {:error, team_result.status}, %{type: :failure, result: team_result}}
 
       {:error, reason} ->
         {team_name, {:error, reason}, %{type: :error, reason: reason}}

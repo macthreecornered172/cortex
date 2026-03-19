@@ -92,7 +92,7 @@ defmodule Cortex.Messaging.MailboxTest do
           send(parent, {:waiter1, result})
         end)
 
-      Process.sleep(10)
+      Process.sleep(100)
 
       waiter2 =
         spawn(fn ->
@@ -100,7 +100,7 @@ defmodule Cortex.Messaging.MailboxTest do
           send(parent, {:waiter2, result})
         end)
 
-      Process.sleep(10)
+      Process.sleep(100)
 
       # Send two messages — first waiter gets first message
       msg1 = make_message("for-waiter-1")

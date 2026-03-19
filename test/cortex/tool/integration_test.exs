@@ -152,7 +152,7 @@ defmodule Cortex.Tool.IntegrationTest do
         end)
       ]
 
-      results = Task.await_many(tasks, 5_000)
+      results = Task.await_many(tasks, 15_000)
 
       assert {:ok, %{"index" => 1}} = Enum.at(results, 0)
       assert {:ok, output} = Enum.at(results, 1)

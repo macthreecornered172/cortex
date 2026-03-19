@@ -1,6 +1,8 @@
 defmodule Cortex.Gateway.HealthTest do
   use ExUnit.Case, async: false
 
+  import Cortex.Test.Eventually
+
   alias Cortex.Gateway.{Health, Registry}
 
   setup do
@@ -63,10 +65,10 @@ defmodule Cortex.Gateway.HealthTest do
           name: :"health_test_#{System.unique_integer()}"
         )
 
-      Process.sleep(150)
-
-      {:ok, updated} = Registry.get(reg, agent.id)
-      assert updated.status == :disconnected
+      assert_eventually(fn ->
+        {:ok, updated} = Registry.get(reg, agent.id)
+        assert updated.status == :disconnected
+      end)
     end
 
     test "does not touch agents with fresh heartbeats", %{registry: reg} do
@@ -82,7 +84,8 @@ defmodule Cortex.Gateway.HealthTest do
           name: :"health_test_#{System.unique_integer()}"
         )
 
-      Process.sleep(150)
+      # Wait for at least one tick to confirm it doesn't touch the agent
+      Process.sleep(200)
 
       {:ok, updated} = Registry.get(reg, agent.id)
       assert updated.status == :idle
@@ -106,15 +109,19 @@ defmodule Cortex.Gateway.HealthTest do
           name: :"health_test_#{System.unique_integer()}"
         )
 
-      # First tick: marks disconnected (~50ms)
-      Process.sleep(100)
-      {:ok, updated} = Registry.get(reg, agent.id)
-      assert updated.status == :disconnected
+      # First: wait for agent to be marked disconnected
+      assert_eventually(fn ->
+        {:ok, updated} = Registry.get(reg, agent.id)
+        assert updated.status == :disconnected
+      end)
 
-      # Wait for removal timeout to pass + another tick
-      Process.sleep(250)
-
-      assert {:error, :not_found} = Registry.get(reg, agent.id)
+      # Then wait for removal (removal_timeout_ms=150ms + another tick)
+      assert_eventually(
+        fn ->
+          assert {:error, :not_found} = Registry.get(reg, agent.id)
+        end,
+        2_000
+      )
     end
 
     test "does not remove agents that resume heartbeats before removal", %{registry: reg} do
@@ -132,10 +139,11 @@ defmodule Cortex.Gateway.HealthTest do
           name: :"health_test_#{System.unique_integer()}"
         )
 
-      # First tick: marks disconnected
-      Process.sleep(150)
-      {:ok, updated} = Registry.get(reg, agent.id)
-      assert updated.status == :disconnected
+      # First tick: wait until agent is marked disconnected
+      assert_eventually(fn ->
+        {:ok, updated} = Registry.get(reg, agent.id)
+        assert updated.status == :disconnected
+      end)
 
       # Stop health gracefully to avoid races
       GenServer.stop(health)
@@ -197,10 +205,10 @@ defmodule Cortex.Gateway.HealthTest do
         )
 
       # After one interval, the agent should be marked disconnected
-      Process.sleep(100)
-
-      {:ok, updated} = Registry.get(reg, agent.id)
-      assert updated.status == :disconnected
+      assert_eventually(fn ->
+        {:ok, updated} = Registry.get(reg, agent.id)
+        assert updated.status == :disconnected
+      end)
     end
   end
 end

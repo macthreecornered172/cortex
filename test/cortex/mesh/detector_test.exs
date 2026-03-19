@@ -1,6 +1,8 @@
 defmodule Cortex.Mesh.DetectorTest do
   use ExUnit.Case, async: false
 
+  import Cortex.Test.Eventually
+
   alias Cortex.Mesh.{Detector, Member, MemberList}
 
   setup do
@@ -29,11 +31,10 @@ defmodule Cortex.Mesh.DetectorTest do
           dead_timeout_ms: 10_000
         )
 
-      # Wait for a heartbeat cycle
-      Process.sleep(150)
-
-      updated = MemberList.get_member(ml_pid, "agent-a")
-      assert updated.state == :suspect
+      assert_eventually(fn ->
+        updated = MemberList.get_member(ml_pid, "agent-a")
+        assert updated.state == :suspect
+      end)
     end
 
     test "promotes suspect to dead after timeout", %{ml_pid: ml_pid} do
@@ -55,11 +56,13 @@ defmodule Cortex.Mesh.DetectorTest do
           dead_timeout_ms: 10_000
         )
 
-      # Wait for heartbeat + suspect timeout
-      Process.sleep(300)
-
-      updated = MemberList.get_member(ml_pid, "agent-a")
-      assert updated.state == :dead
+      assert_eventually(
+        fn ->
+          updated = MemberList.get_member(ml_pid, "agent-a")
+          assert updated.state == :dead
+        end,
+        2_000
+      )
     end
 
     test "keeps alive member with nil os_pid as suspect", %{ml_pid: ml_pid} do
@@ -81,10 +84,10 @@ defmodule Cortex.Mesh.DetectorTest do
           dead_timeout_ms: 10_000
         )
 
-      Process.sleep(150)
-
-      updated = MemberList.get_member(ml_pid, "agent-b")
-      assert updated.state == :suspect
+      assert_eventually(fn ->
+        updated = MemberList.get_member(ml_pid, "agent-b")
+        assert updated.state == :suspect
+      end)
     end
   end
 end

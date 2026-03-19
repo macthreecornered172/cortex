@@ -85,7 +85,9 @@ defmodule Cortex.Gossip.Config.Loader do
       model: Map.get(raw, "model", "sonnet"),
       max_turns: Map.get(raw, "max_turns", 200),
       permission_mode: Map.get(raw, "permission_mode", "acceptEdits"),
-      timeout_minutes: Map.get(raw, "timeout_minutes", 30)
+      timeout_minutes: Map.get(raw, "timeout_minutes", 30),
+      provider: parse_provider(Map.get(raw, "provider")) || :cli,
+      backend: parse_backend(Map.get(raw, "backend")) || :local
     }
   end
 
@@ -217,4 +219,18 @@ defmodule Cortex.Gossip.Config.Loader do
 
     Enum.reverse(round_err ++ interval_err ++ topo_err) ++ errors
   end
+
+  # Safe string-to-atom conversion for provider field.
+  # Returns nil for unknown values; falls back to default.
+  defp parse_provider("cli"), do: :cli
+  defp parse_provider("http"), do: :http
+  defp parse_provider("external"), do: :external
+  defp parse_provider(_), do: nil
+
+  # Safe string-to-atom conversion for backend field.
+  # Returns nil for unknown values; falls back to default.
+  defp parse_backend("local"), do: :local
+  defp parse_backend("docker"), do: :docker
+  defp parse_backend("k8s"), do: :k8s
+  defp parse_backend(_), do: nil
 end

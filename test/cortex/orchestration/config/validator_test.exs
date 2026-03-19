@@ -236,6 +236,101 @@ defmodule Cortex.Orchestration.Config.ValidatorTest do
       assert "teams list cannot be empty" in errors
       assert length(errors) >= 2
     end
+
+    test "valid provider values pass" do
+      for provider <- [:cli] do
+        config = %{valid_config() | defaults: %Defaults{provider: provider}}
+        assert {:ok, %Config{}, _warnings} = Validator.validate(config)
+      end
+    end
+
+    test "unimplemented provider values are errors" do
+      for provider <- [:http, :external] do
+        config = %{valid_config() | defaults: %Defaults{provider: provider}}
+        assert {:error, errors} = Validator.validate(config)
+        assert Enum.any?(errors, &String.contains?(&1, "not yet implemented"))
+      end
+    end
+
+    test "invalid provider value is an error" do
+      config = %{valid_config() | defaults: %Defaults{provider: :openai}}
+      assert {:error, errors} = Validator.validate(config)
+      assert Enum.any?(errors, &String.contains?(&1, "invalid provider"))
+    end
+
+    test "valid backend values pass" do
+      for backend <- [:local, :docker, :k8s] do
+        config = %{valid_config() | defaults: %Defaults{backend: backend}}
+        assert {:ok, %Config{}, _warnings} = Validator.validate(config)
+      end
+    end
+
+    test "invalid backend value is an error" do
+      config = %{valid_config() | defaults: %Defaults{backend: :fly}}
+      assert {:error, errors} = Validator.validate(config)
+      assert Enum.any?(errors, &String.contains?(&1, "invalid backend"))
+    end
+
+    test "provider :external is blocked in Phase 1" do
+      config = %{valid_config() | defaults: %Defaults{provider: :external}}
+      assert {:error, errors} = Validator.validate(config)
+      assert Enum.any?(errors, &String.contains?(&1, "not yet implemented"))
+    end
+
+    test "team-level invalid provider is an error" do
+      config =
+        update_first_team(valid_config(), fn team ->
+          %{team | provider: :openai}
+        end)
+
+      assert {:error, errors} = Validator.validate(config)
+      assert Enum.any?(errors, &String.contains?(&1, "invalid provider"))
+    end
+
+    test "team-level invalid backend is an error" do
+      config =
+        update_first_team(valid_config(), fn team ->
+          %{team | backend: :fly}
+        end)
+
+      assert {:error, errors} = Validator.validate(config)
+      assert Enum.any?(errors, &String.contains?(&1, "invalid backend"))
+    end
+
+    test "team-level provider :external is blocked" do
+      config =
+        update_first_team(valid_config(), fn team ->
+          %{team | provider: :external}
+        end)
+
+      assert {:error, errors} = Validator.validate(config)
+      assert Enum.any?(errors, &String.contains?(&1, "not yet implemented"))
+    end
+
+    test "provider :http is blocked until Provider.HTTP ships" do
+      config = %{valid_config() | defaults: %Defaults{provider: :http}}
+      assert {:error, errors} = Validator.validate(config)
+      assert Enum.any?(errors, &String.contains?(&1, "not yet implemented"))
+    end
+
+    test "team-level provider :http is blocked" do
+      config =
+        update_first_team(valid_config(), fn team ->
+          %{team | provider: :http}
+        end)
+
+      assert {:error, errors} = Validator.validate(config)
+      assert Enum.any?(errors, &String.contains?(&1, "not yet implemented"))
+    end
+
+    test "nil team-level provider and backend pass (inherit from defaults)" do
+      config =
+        update_first_team(valid_config(), fn team ->
+          %{team | provider: nil, backend: nil}
+        end)
+
+      assert {:ok, %Config{}, _warnings} = Validator.validate(config)
+    end
   end
 
   # --- Soft Warning Tests ---
@@ -317,6 +412,58 @@ defmodule Cortex.Orchestration.Config.ValidatorTest do
 
       assert {:ok, _config, warnings} = Validator.validate(config)
       assert warnings == []
+    end
+
+    test "backend :docker with provider :cli produces a warning" do
+      config = %{valid_config() | defaults: %Defaults{provider: :cli, backend: :docker}}
+
+      config =
+        update_first_team(config, fn team ->
+          %{team | tasks: [%Task{summary: "Work", details: "Do it", verify: "make test"}]}
+        end)
+
+      assert {:ok, _config, warnings} = Validator.validate(config)
+      assert Enum.any?(warnings, &String.contains?(&1, "unusual"))
+    end
+
+    test "backend :k8s with provider :cli produces a warning" do
+      config = %{valid_config() | defaults: %Defaults{provider: :cli, backend: :k8s}}
+
+      config =
+        update_first_team(config, fn team ->
+          %{team | tasks: [%Task{summary: "Work", details: "Do it", verify: "make test"}]}
+        end)
+
+      assert {:ok, _config, warnings} = Validator.validate(config)
+      assert Enum.any?(warnings, &String.contains?(&1, "unusual"))
+    end
+
+    test "backend :local with provider :cli produces no provider/backend warning" do
+      config =
+        update_first_team(valid_config(), fn team ->
+          %{
+            team
+            | tasks: [%Task{summary: "Work", details: "Do it", verify: "make test"}],
+              members: []
+          }
+        end)
+
+      assert {:ok, _config, warnings} = Validator.validate(config)
+      refute Enum.any?(warnings, &String.contains?(&1, "unusual"))
+    end
+
+    test "team-level backend :docker with inherited :cli provider produces a warning" do
+      config =
+        update_first_team(valid_config(), fn team ->
+          %{
+            team
+            | backend: :docker,
+              tasks: [%Task{summary: "Work", details: "Do it", verify: "make test"}]
+          }
+        end)
+
+      assert {:ok, _config, warnings} = Validator.validate(config)
+      assert Enum.any?(warnings, &String.contains?(&1, "unusual"))
     end
   end
 

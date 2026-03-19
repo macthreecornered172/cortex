@@ -250,6 +250,155 @@ defmodule Cortex.Orchestration.Config.LoaderTest do
     end
   end
 
+  describe "provider/backend parsing" do
+    test "parses provider and backend from defaults" do
+      yaml = """
+      name: "with-provider"
+      defaults:
+        provider: cli
+        backend: local
+      teams:
+        - name: t1
+          lead:
+            role: "Lead"
+          tasks:
+            - summary: "Work"
+              details: "d"
+              verify: "v"
+      """
+
+      assert {:ok, config, _warnings} = Loader.load_string(yaml)
+      assert config.defaults.provider == :cli
+      assert config.defaults.backend == :local
+    end
+
+    test "rejects unimplemented provider" do
+      yaml = """
+      name: "with-provider"
+      defaults:
+        provider: http
+        backend: local
+      teams:
+        - name: t1
+          lead:
+            role: "Lead"
+          tasks:
+            - summary: "Work"
+              details: "d"
+              verify: "v"
+      """
+
+      assert {:error, errors} = Loader.load_string(yaml)
+      assert Enum.any?(errors, &String.contains?(&1, "not yet implemented"))
+    end
+
+    test "parses provider and backend per team" do
+      yaml = """
+      name: "team-override"
+      defaults:
+        provider: cli
+        backend: local
+      teams:
+        - name: remote-team
+          provider: cli
+          backend: local
+          lead:
+            role: "Lead"
+          tasks:
+            - summary: "Work"
+              details: "d"
+              verify: "v"
+      """
+
+      assert {:ok, config, _warnings} = Loader.load_string(yaml)
+      [team] = config.teams
+      assert team.provider == :cli
+      assert team.backend == :local
+    end
+
+    test "defaults to :cli/:local when provider/backend are omitted" do
+      yaml = """
+      name: "no-provider"
+      defaults:
+        model: opus
+      teams:
+        - name: t1
+          lead:
+            role: "Lead"
+          tasks:
+            - summary: "Work"
+              details: "d"
+              verify: "v"
+      """
+
+      assert {:ok, config, _warnings} = Loader.load_string(yaml)
+      assert config.defaults.provider == :cli
+      assert config.defaults.backend == :local
+    end
+
+    test "team-level provider/backend are nil when omitted" do
+      yaml = """
+      name: "no-team-provider"
+      teams:
+        - name: t1
+          lead:
+            role: "Lead"
+          tasks:
+            - summary: "Work"
+              details: "d"
+              verify: "v"
+      """
+
+      assert {:ok, config, _warnings} = Loader.load_string(yaml)
+      [team] = config.teams
+      assert is_nil(team.provider)
+      assert is_nil(team.backend)
+    end
+
+    test "unknown provider string becomes nil (validator catches it)" do
+      yaml = """
+      name: "bad-provider"
+      defaults:
+        provider: openai
+      teams:
+        - name: t1
+          lead:
+            role: "Lead"
+          tasks:
+            - summary: "Work"
+              details: "d"
+              verify: "v"
+      """
+
+      # Unknown provider parses to nil, which falls back to :cli default in build_defaults
+      # But at team level, unknown strings would become nil
+      assert {:ok, config, _warnings} = Loader.load_string(yaml)
+      # The || :cli fallback in build_defaults means unknown defaults to :cli
+      assert config.defaults.provider == :cli
+    end
+
+    test "parses external provider from defaults" do
+      yaml = """
+      name: "external"
+      defaults:
+        provider: external
+        backend: docker
+      teams:
+        - name: t1
+          lead:
+            role: "Lead"
+          tasks:
+            - summary: "Work"
+              details: "d"
+              verify: "v"
+      """
+
+      # Parses fine but validator will reject it
+      assert {:error, errors} = Loader.load_string(yaml)
+      assert Enum.any?(errors, &String.contains?(&1, "not yet implemented"))
+    end
+  end
+
   describe "load/1" do
     test "returns error for non-existent file" do
       assert {:error, errors} = Loader.load("/tmp/nonexistent_cortex_test.yaml")

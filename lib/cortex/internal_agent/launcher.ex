@@ -11,20 +11,28 @@ defmodule Cortex.InternalAgent.Launcher do
   """
 
   alias Cortex.InternalAgent.SpawnConfig
-  alias Cortex.Orchestration.Spawner
+  alias Cortex.Provider.CLI, as: ProviderCLI
 
   require Logger
 
   @doc """
   Synchronously spawns a `claude -p` agent and returns the result.
 
-  Callers can wrap this in whatever concurrency strategy they need.
+  Dispatches through the `Provider.CLI` start/run/stop lifecycle.
+  Internal agents always use Provider.CLI (they have no per-agent
+  provider config).
   """
   @spec run(SpawnConfig.t()) :: {:ok, map()} | {:error, term()}
   def run(%SpawnConfig{} = config) do
-    config
-    |> SpawnConfig.to_spawner_opts()
-    |> Spawner.spawn()
+    provider_config = %{command: config.command, cwd: config.cwd}
+
+    with {:ok, handle} <- ProviderCLI.start(provider_config) do
+      try do
+        ProviderCLI.run(handle, config.prompt, SpawnConfig.to_run_opts(config))
+      after
+        ProviderCLI.stop(handle)
+      end
+    end
   end
 
   @doc """

@@ -44,6 +44,7 @@ defmodule Cortex.MixProject do
       {:plug_cowboy, "~> 2.7"},
       {:floki, ">= 0.30.0", only: :test},
       {:lazy_html, ">= 0.1.0", only: :test},
+      {:mox, "~> 1.1", only: :test},
 
       # Phase 2: gRPC data plane
       {:grpc, "~> 0.9"},

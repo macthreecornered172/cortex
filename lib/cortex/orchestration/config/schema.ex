@@ -8,19 +8,28 @@ defmodule Cortex.Orchestration.Config.Defaults do
     - `max_turns` — maximum conversation turns per agent (default: `200`)
     - `permission_mode` — how the agent handles edit permissions (default: `"acceptEdits"`)
     - `timeout_minutes` — per-team execution timeout in minutes (default: `30`)
+    - `provider` — the provider type for LLM communication (default: `:cli`)
+    - `backend` — the compute backend for spawning agents (default: `:local`)
 
   """
+
+  @type provider :: :cli | :http | :external
+  @type backend :: :local | :docker | :k8s
 
   defstruct model: "sonnet",
             max_turns: 200,
             permission_mode: "acceptEdits",
-            timeout_minutes: 30
+            timeout_minutes: 30,
+            provider: :cli,
+            backend: :local
 
   @type t :: %__MODULE__{
           model: String.t(),
           max_turns: pos_integer(),
           permission_mode: String.t(),
-          timeout_minutes: pos_integer()
+          timeout_minutes: pos_integer(),
+          provider: provider(),
+          backend: backend()
         }
 end
 
@@ -115,16 +124,20 @@ defmodule Cortex.Orchestration.Config.Team do
     - `tasks` — list of `%Task{}` structs (required, at least one)
     - `depends_on` — list of team name strings this team depends on (default: `[]`)
     - `context` — free-form string injected into the team's prompt (default: `nil`)
+    - `provider` — optional provider override for this team (default: `nil`, inherits from defaults)
+    - `backend` — optional backend override for this team (default: `nil`, inherits from defaults)
 
   """
 
-  alias Cortex.Orchestration.Config.{Lead, Member, Task}
+  alias Cortex.Orchestration.Config.{Defaults, Lead, Member, Task}
 
   @enforce_keys [:name, :lead, :tasks]
   defstruct [
     :name,
     :lead,
     :context,
+    :provider,
+    :backend,
     members: [],
     tasks: [],
     depends_on: []
@@ -136,7 +149,9 @@ defmodule Cortex.Orchestration.Config.Team do
           members: [Member.t()],
           tasks: [Task.t()],
           depends_on: [String.t()],
-          context: String.t() | nil
+          context: String.t() | nil,
+          provider: Defaults.provider() | nil,
+          backend: Defaults.backend() | nil
         }
 end
 

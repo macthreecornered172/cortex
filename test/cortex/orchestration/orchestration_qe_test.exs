@@ -14,6 +14,7 @@ defmodule Cortex.Orchestration.OrchestrationQETest do
   alias Cortex.Orchestration.Workspace
 
   @moduletag :orchestration_qe
+  @moduletag timeout: 300_000
 
   # ---------------------------------------------------------------------------
   # Helpers

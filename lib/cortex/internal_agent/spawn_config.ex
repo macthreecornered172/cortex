@@ -52,6 +52,30 @@ defmodule Cortex.InternalAgent.SpawnConfig do
         }
 
   @doc """
+  Extracts per-run options for `Provider.run/3`, excluding the prompt and
+  provider-level config (command, cwd).
+
+  These options are the runtime settings that vary per invocation:
+  team name, model, max turns, permission mode, timeout, callbacks, etc.
+
+  Nil optional fields are omitted from the output.
+  """
+  @spec to_run_opts(t()) :: keyword()
+  def to_run_opts(%__MODULE__{} = config) do
+    [
+      team_name: config.team_name,
+      model: config.model,
+      max_turns: config.max_turns,
+      permission_mode: config.permission_mode,
+      timeout_minutes: config.timeout_minutes
+    ]
+    |> maybe_add(:log_path, config.log_path)
+    |> maybe_add(:on_token_update, config.on_token_update)
+    |> maybe_add(:on_activity, config.on_activity)
+    |> maybe_add(:on_port_opened, config.on_port_opened)
+  end
+
+  @doc """
   Converts the struct to the keyword list that `Spawner.spawn/1` expects.
 
   Nil optional fields are omitted from the output.
