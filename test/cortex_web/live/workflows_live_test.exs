@@ -308,4 +308,130 @@ defmodule CortexWeb.WorkflowsLiveTest do
     refute html =~ "Launch Run"
     refute html =~ "Configuration Preview"
   end
+
+  # ==========================================================================
+  # Example YAML integration tests
+  #
+  # These validate every example file through the actual LiveView form flow,
+  # catching integration bugs between UI event handling, mode resolution,
+  # and backend validators.
+  # ==========================================================================
+
+  @example_files %{
+    "dag" => ["examples/dag-demo.yaml", "examples/dag-complex.yaml"],
+    "mesh" => ["examples/mesh-simple.yaml", "examples/mesh-complex.yaml"],
+    "gossip" => ["examples/gossip-simple.yaml", "examples/gossip-complex.yaml"]
+  }
+
+  for {mode, files} <- @example_files, file <- files do
+    @tag_mode mode
+    @tag_file file
+
+    test "example #{file} validates successfully through UI", %{conn: conn} do
+      yaml = File.read!(@tag_file)
+      {:ok, view, _html} = live(conn, "/workflows")
+
+      # Switch to the correct mode
+      if @tag_mode != "dag" do
+        render_click(view, "select_mode", %{"mode" => @tag_mode})
+      end
+
+      # Submit YAML through the form (same path as a real user)
+      html =
+        view
+        |> form("form", %{"yaml" => yaml})
+        |> render_submit()
+
+      # Must not show any validation errors
+      refute html =~ "cannot be empty",
+             "Example #{@tag_file} failed validation with 'cannot be empty'"
+
+      refute html =~ "Please provide YAML content",
+             "Example #{@tag_file} resulted in empty YAML"
+
+      # Must show the Launch Run button (means validation passed)
+      assert html =~ "Launch Run",
+             "Example #{@tag_file} did not produce a Launch Run button after validation"
+    end
+  end
+
+  # -- File path loading --
+
+  test "loading YAML via file path validates successfully", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/workflows")
+
+    # Use absolute path to avoid CWD issues
+    abs_path = Path.expand("examples/dag-demo.yaml")
+
+    html =
+      view
+      |> form("form", %{"yaml" => "", "path" => abs_path})
+      |> render_submit()
+
+    refute html =~ "cannot be empty"
+    assert html =~ "Launch Run"
+  end
+
+  # -- Template validation --
+
+  for {template_id, mode} <- [
+        {"dag_starter", "dag"},
+        {"mesh_starter", "mesh"},
+        {"gossip_starter", "gossip"}
+      ] do
+    @tag_template template_id
+
+    test "template #{template_id} loads and validates", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/workflows")
+
+      # Load the template (also switches mode automatically)
+      render_click(view, "load_template", %{"template" => @tag_template})
+
+      # Validate it
+      html =
+        view
+        |> form("form", %{})
+        |> render_submit()
+
+      refute html =~ "cannot be empty",
+             "Template #{@tag_template} failed validation"
+
+      assert html =~ "Launch Run",
+             "Template #{@tag_template} did not produce Launch Run button"
+    end
+  end
+
+  # -- Cross-mode validation --
+  # Users might paste mesh/gossip YAML while on the wrong tab.
+  # The UI should auto-detect and validate correctly.
+
+  test "mesh YAML pasted while on DAG tab auto-detects and validates", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/workflows")
+
+    # Stay on DAG tab, paste mesh YAML
+    html =
+      view
+      |> form("form", %{"yaml" => @valid_mesh_yaml})
+      |> render_submit()
+
+    # Should auto-detect mesh mode and validate successfully
+    refute html =~ "teams list cannot be empty",
+           "Mesh YAML failed when pasted on DAG tab — mode auto-detection broken"
+
+    assert html =~ "Launch Run"
+  end
+
+  test "gossip YAML pasted while on DAG tab auto-detects and validates", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/workflows")
+
+    html =
+      view
+      |> form("form", %{"yaml" => @valid_gossip_yaml})
+      |> render_submit()
+
+    refute html =~ "teams list cannot be empty",
+           "Gossip YAML failed when pasted on DAG tab — mode auto-detection broken"
+
+    assert html =~ "Launch Run"
+  end
 end
