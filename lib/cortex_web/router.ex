@@ -44,6 +44,7 @@ defmodule CortexWeb.Router do
     live("/workflows", NewRunLive, :index)
     live("/gossip", GossipLive, :index)
     live("/mesh", MeshLive, :index)
+    live("/cluster", ClusterLive, :index)
     live("/jobs", JobsLive, :index)
   end
 
