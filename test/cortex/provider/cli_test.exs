@@ -224,15 +224,19 @@ defmodule Cortex.Provider.CLITest do
   end
 
   describe "run/1 option requirements" do
-    test "requires team_name" do
+    test "requires team_name", %{tmp_dir: tmp_dir} do
+      script = write_mock_script(tmp_dir, "noop.sh", "exit 0")
+
       assert_raise KeyError, ~r/:team_name/, fn ->
-        CLI.run(prompt: "test")
+        CLI.run(prompt: "test", command: script)
       end
     end
 
-    test "requires prompt" do
+    test "requires prompt", %{tmp_dir: tmp_dir} do
+      script = write_mock_script(tmp_dir, "noop.sh", "exit 0")
+
       assert_raise KeyError, ~r/:prompt/, fn ->
-        CLI.run(team_name: "test")
+        CLI.run(team_name: "test", command: script)
       end
     end
   end
@@ -373,9 +377,11 @@ defmodule Cortex.Provider.CLITest do
       assert {:ok, %TeamResult{status: :success, result: "Resumed work"}} = CLI.resume(opts)
     end
 
-    test "requires session_id" do
+    test "requires session_id", %{tmp_dir: tmp_dir} do
+      script = write_mock_script(tmp_dir, "noop.sh", "exit 0")
+
       assert_raise KeyError, ~r/:session_id/, fn ->
-        CLI.resume(team_name: "test", prompt: "continue")
+        CLI.resume(team_name: "test", prompt: "continue", command: script)
       end
     end
   end
@@ -395,9 +401,10 @@ defmodule Cortex.Provider.CLITest do
       assert handle.cwd == "/tmp"
     end
 
-    test "uses defaults when config keys are missing" do
-      assert {:ok, handle} = CLI.start(%{})
-      assert handle.command == "claude"
+    test "uses defaults when config keys are missing", %{tmp_dir: tmp_dir} do
+      script = write_mock_script(tmp_dir, "noop.sh", "exit 0")
+      assert {:ok, handle} = CLI.start(%{command: script})
+      assert handle.command == script
       assert handle.cwd == nil
     end
   end

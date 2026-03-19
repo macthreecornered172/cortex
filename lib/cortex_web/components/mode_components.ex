@@ -36,7 +36,7 @@ defmodule CortexWeb.ModeComponents do
     ~H"""
     <div class={["space-y-4", @class]}>
       <%!-- Tab bar --%>
-      <div class="flex gap-1 bg-gray-950 rounded-lg p-1" role="tablist" aria-label="Coordination mode">
+      <div class="flex gap-1 bg-gray-950 rounded-lg p-1 border border-gray-800" role="tablist" aria-label="Coordination mode">
         <.mode_tab
           mode="dag"
           label="DAG Workflow"
@@ -84,10 +84,10 @@ defmodule CortexWeb.ModeComponents do
       phx-click={@on_select}
       phx-value-mode={@mode}
       class={[
-        "flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors",
+        "flex-1 px-4 py-2.5 text-sm font-medium rounded-md transition-all cursor-pointer",
         if(@selected,
-          do: "bg-gray-800 text-white shadow-sm",
-          else: "text-gray-400 hover:text-gray-300"
+          do: "bg-gray-800 text-white shadow-sm border border-gray-600",
+          else: "text-gray-400 hover:text-white hover:bg-gray-800/50 border border-transparent"
         )
       ]}
       role="tab"
@@ -102,11 +102,11 @@ defmodule CortexWeb.ModeComponents do
     """
   end
 
-  defp mode_indicator_class("dag", true), do: "text-cortex-400 text-xs"
-  defp mode_indicator_class("dag", false), do: "text-gray-600 text-xs"
-  defp mode_indicator_class("mesh", true), do: "text-blue-400 text-xs"
-  defp mode_indicator_class("mesh", false), do: "text-gray-600 text-xs"
-  defp mode_indicator_class("gossip", true), do: "text-purple-400 text-xs"
-  defp mode_indicator_class("gossip", false), do: "text-gray-600 text-xs"
-  defp mode_indicator_class(_, _), do: "text-gray-600 text-xs"
+  defp mode_indicator_class("dag", true), do: "text-cortex-400 text-sm"
+  defp mode_indicator_class("dag", false), do: "text-gray-500 text-sm"
+  defp mode_indicator_class("mesh", true), do: "text-blue-400 text-sm"
+  defp mode_indicator_class("mesh", false), do: "text-gray-500 text-sm"
+  defp mode_indicator_class("gossip", true), do: "text-purple-400 text-sm"
+  defp mode_indicator_class("gossip", false), do: "text-gray-500 text-sm"
+  defp mode_indicator_class(_, _), do: "text-gray-500 text-sm"
 end

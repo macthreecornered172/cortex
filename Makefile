@@ -1,4 +1,4 @@
-.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check e2e
+.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-all e2e sidecar-build sidecar-test sidecar-lint sidecar-check
 
 # -- Development --
 
@@ -117,10 +117,29 @@ proto-breaking: ## Check for wire-breaking changes vs main (requires buf)
 proto-check: proto ## CI: regenerate stubs and verify no diff
 	git diff --exit-code sidecar/internal/proto/ lib/cortex/gateway/proto/
 
-# -- E2E Tests --
+# -- Integration & E2E Tests --
+
+test-integration: ## Run only @tag :integration tests (requires real claude CLI)
+	mix test --only integration
+
+test-all: ## Run ALL tests including integration (requires real claude CLI)
+	mix test --include integration
 
 e2e: ## Run end-to-end sidecar ↔ gRPC ↔ gateway test
 	./test/e2e/sidecar_e2e_test.sh
+
+# -- Sidecar (Go) --
+
+sidecar-build: ## Build the Go sidecar binary
+	cd sidecar && make build
+
+sidecar-test: ## Run sidecar Go tests
+	cd sidecar && make test
+
+sidecar-lint: ## Lint sidecar Go code
+	cd sidecar && make lint
+
+sidecar-check: sidecar-lint sidecar-test sidecar-build ## Full sidecar CI: lint + test + build
 
 # -- Benchmarks --
 

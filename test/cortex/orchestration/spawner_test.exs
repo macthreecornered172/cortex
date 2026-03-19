@@ -217,15 +217,19 @@ defmodule Cortex.Orchestration.SpawnerTest do
   end
 
   describe "spawn/1 option defaults" do
-    test "requires team_name" do
+    test "requires team_name", %{tmp_dir: tmp_dir} do
+      script = write_mock_script(tmp_dir, "noop.sh", "exit 0")
+
       assert_raise KeyError, ~r/:team_name/, fn ->
-        Spawner.spawn(prompt: "test")
+        Spawner.spawn(prompt: "test", command: script)
       end
     end
 
-    test "requires prompt" do
+    test "requires prompt", %{tmp_dir: tmp_dir} do
+      script = write_mock_script(tmp_dir, "noop.sh", "exit 0")
+
       assert_raise KeyError, ~r/:prompt/, fn ->
-        Spawner.spawn(team_name: "test")
+        Spawner.spawn(team_name: "test", command: script)
       end
     end
   end

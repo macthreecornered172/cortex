@@ -40,6 +40,29 @@ defmodule Cortex.Provider.CLI do
   @default_timeout_minutes 30
   @default_command "claude"
 
+  # Guard: never allow spawning the real `claude` binary in test env.
+  # Tests must always pass an explicit `:command` pointing to a mock script.
+  if Mix.env() == :test do
+    defp guard_real_claude!(command) do
+      basename = command |> Path.basename()
+
+      if basename == "claude" do
+        raise RuntimeError, """
+        Attempted to spawn real `claude` binary in test environment!
+
+        All tests must pass an explicit `:command` option pointing to a mock script.
+        This guard prevents runaway Claude sessions from `mix test`.
+
+        Got command: #{inspect(command)}
+        """
+      end
+
+      :ok
+    end
+  else
+    defp guard_real_claude!(_command), do: :ok
+  end
+
   # -- Provider Behaviour Callbacks --------------------------------------------
 
   @doc """
@@ -56,12 +79,14 @@ defmodule Cortex.Provider.CLI do
   @spec start(Cortex.Provider.config()) :: {:ok, Cortex.Provider.handle()} | {:error, term()}
   def start(config) when is_map(config) do
     command = Map.get(config, :command, @default_command)
+    guard_real_claude!(command)
     cwd = Map.get(config, :cwd)
     {:ok, %{command: command, cwd: cwd}}
   end
 
   def start(config) when is_list(config) do
     command = Keyword.get(config, :command, @default_command)
+    guard_real_claude!(command)
     cwd = Keyword.get(config, :cwd)
     {:ok, %{command: command, cwd: cwd}}
   end

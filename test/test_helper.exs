@@ -1,2 +1,2 @@
-ExUnit.start(exclude: [:pending])
+ExUnit.start(exclude: [:pending, :integration])
 Ecto.Adapters.SQL.Sandbox.mode(Cortex.Repo, :manual)

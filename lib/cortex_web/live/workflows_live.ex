@@ -715,15 +715,25 @@ defmodule CortexWeb.WorkflowsLive do
   # -- Private helpers --
 
   defp effective_yaml(socket) do
+    file_path = String.trim(socket.assigns.file_path)
+
     cond do
+      # File path takes priority when set — user explicitly chose a file
+      file_path != "" ->
+        case File.read(file_path) do
+          {:ok, content} ->
+            content
+
+          _ ->
+            # Try relative to project root
+            case File.read(Path.join(File.cwd!(), file_path)) do
+              {:ok, content} -> content
+              _ -> ""
+            end
+        end
+
       socket.assigns.yaml_content != "" ->
         socket.assigns.yaml_content
-
-      socket.assigns.file_path != "" ->
-        case File.read(socket.assigns.file_path) do
-          {:ok, content} -> content
-          _ -> ""
-        end
 
       true ->
         ""
