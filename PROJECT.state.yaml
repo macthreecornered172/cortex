@@ -47,10 +47,15 @@ tracks:
         status: next
         depends_on: [phase-1-foundation]
         notes: "Provider.HTTP — call Claude Messages API directly with agentic loop"
-      phase-3-remote-backends:
-        config: docs/compute-spawning/phase-3-remote-backends/kickoff.yaml
+      phase-3-external-provider:
+        config: docs/compute-spawning/phase-3-external-provider/kickoff.yaml
         status: next
         depends_on: [phase-1-foundation]
+        notes: "Provider.External — dispatch work to sidecar agents via Gateway, wire route_task_result"
+      phase-4-remote-backends:
+        config: docs/compute-spawning/phase-4-remote-backends/kickoff.yaml
+        status: pending
+        depends_on: [phase-3-external-provider]
         notes: "SpawnBackend.Docker and SpawnBackend.K8s with agent+sidecar co-deployment"
 
   cluster-mode:

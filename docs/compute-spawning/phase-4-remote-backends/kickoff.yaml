@@ -10,8 +10,10 @@ system_context: |
 
   Cortex is an Elixir/OTP multi-agent orchestration system. Phase 1 introduced Provider and
   SpawnBackend behaviours. Phase 2 added Provider.HTTP for direct Claude API integration.
+  Phase 3 added Provider.External — dispatch work to sidecar agents via Gateway.
   This phase adds remote compute backends — Docker containers and Kubernetes Jobs — so agents
-  can run on infrastructure beyond the local machine.
+  can run on infrastructure beyond the local machine, using Provider.External for the
+  control plane.
 
   ## Architecture
 
@@ -133,10 +135,10 @@ system_context: |
 dependencies:
   - docs/compute-spawning/PROJECT.md
   - docs/compute-spawning/phase-1-foundation/kickoff.yaml
-  - docs/compute-spawning/phase-2-http-provider/kickoff.yaml
+  - docs/compute-spawning/phase-3-external-provider/kickoff.yaml
 
-plans_dir: docs/compute-spawning/phase-3-remote-backends/plans
-content_dir: docs/compute-spawning/phase-3-remote-backends/content
+plans_dir: docs/compute-spawning/phase-4-remote-backends/plans
+content_dir: docs/compute-spawning/phase-4-remote-backends/content
 
 teammates:
   - role: "Container Spec Engineer"

@@ -129,22 +129,31 @@ The two deployment modes:
 | Phase | Config | Goal |
 |-------|--------|------|
 | 1 — Foundation | `docs/compute-spawning/phase-1-foundation/kickoff.yaml` | Provider & SpawnBackend behaviours; refactor existing code into Provider.CLI + SpawnBackend.Local |
-| 2 — External Provider | `docs/compute-spawning/phase-2-external-provider/kickoff.yaml` | Provider.External + Gateway.Discovery; wire `route_task_result/2` to deliver results back to orchestrator |
-| 3 — Remote Backends | `docs/compute-spawning/phase-3-remote-backends/kickoff.yaml` | SpawnBackend.Docker/K8s with agent+sidecar co-deployment pattern |
+| 2 — HTTP Provider | `docs/compute-spawning/phase-2-http-provider/kickoff.yaml` | Provider.HTTP — call Claude Messages API directly with agentic loop (independent of sidecar path) |
+| 3 — External Provider | `docs/compute-spawning/phase-3-external-provider/kickoff.yaml` | Provider.External — dispatch work to sidecar agents via Gateway; wire `route_task_result/2` |
+| 4 — Remote Backends | `docs/compute-spawning/phase-4-remote-backends/kickoff.yaml` | SpawnBackend.Docker/K8s with agent+sidecar co-deployment pattern |
 
 ### Phase 1 — Foundation
 
 Extract `Provider` and `SpawnBackend` behaviours from the existing codebase. Refactor the current `Spawner` into `Provider.CLI` + `SpawnBackend.Local` behind those behaviours. Wire the orchestration `Runner.Executor` to dispatch through `Provider` instead of calling `Spawner` directly. Add `provider`/`backend` fields to YAML config (defaulting to `cli`/`local`). All existing tests must pass — this is a pure refactor with no new capabilities.
 
-### Phase 2 — External Provider
+### Phase 2 — HTTP Provider
 
-Implement `Provider.External` to dispatch `TaskRequest` messages to sidecar-connected agents discovered via `Gateway.Discovery`. Wire `Gateway.Registry.route_task_result/2` (currently a no-op) to deliver `TaskResult` back to the orchestration `Runner` as completed team results. This is **Flow A**: routing work to agents that are already registered with Gateway (connected manually or from a prior spawn). Key integration points:
+Implement `Provider.HTTP` to call the Claude Messages API directly via HTTP, managing the full agentic conversation loop (send → stream → tool_use → execute → repeat). This is independent of the sidecar path — it gives Cortex direct API access without shelling out to `claude -p`. See `docs/compute-spawning/phase-2-http-provider/kickoff.yaml`.
 
-- `Provider.External.run_task/2` → find agent by capability via `Registry.list_by_capability/2` → push `TaskRequest` via `Registry.get_push_pid/2`
-- `GrpcServer.handle_task_result/2` → `Registry.route_task_result/2` → callback/message to `Runner.Executor` with the `TeamResult`
-- Gateway.Discovery handles agent selection (capability match, load balancing, health checks)
+### Phase 3 — External Provider
 
-### Phase 3 — Remote Backends
+Implement `Provider.External` to dispatch work to sidecar-connected agents via the Gateway. The provider looks up agents by name in `Gateway.Registry`, pushes a `TaskRequest` via the agent's gRPC stream or WebSocket channel, and blocks until a `TaskResult` comes back. Wire `route_task_result/2` (currently a no-op) to deliver results to the waiting caller via a pending task registry.
+
+This is the critical middle layer — it connects the orchestration engine (DAG, mesh, gossip) to the sidecar control plane. No capability-based discovery in this phase; the orchestrator knows which agent it's targeting by name. Discovery and load balancing are future enhancements.
+
+Key integration points:
+
+- `Provider.External.run/3` → find agent by name in `Registry` → push `TaskRequest` via `get_push_pid/2`
+- `GrpcServer` receives `TaskResult` → `Registry.route_task_result/2` → `PendingTasks.resolve_task/2` → result delivered to waiting caller
+- All three workflow modes (DAG, mesh, gossip) work with `provider: external` in config
+
+### Phase 4 — Remote Backends
 
 Implement `SpawnBackend.Docker` and `SpawnBackend.K8s` to provision compute that co-deploys an agent process alongside a sidecar as a single unit. This is **Flow B**: the orchestrator creates new compute when no suitable agent is already registered.
 

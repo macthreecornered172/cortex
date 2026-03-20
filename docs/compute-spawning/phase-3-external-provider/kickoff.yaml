@@ -1,0 +1,259 @@
+phase: "External Provider"
+
+goal: >
+  Implement Provider.External — a provider that dispatches work to sidecar-connected agents
+  via the Gateway, and wire route_task_result/2 to deliver results back to the orchestrator.
+  This enables all three workflow modes (DAG, mesh, gossip) to run agents through the
+  sidecar control plane instead of local Erlang ports.
+
+system_context: |
+  ## Project Overview
+
+  Cortex is an Elixir/OTP multi-agent orchestration system. Phase 1 introduced Provider and
+  SpawnBackend behaviours and refactored existing CLI spawning into Provider.CLI +
+  SpawnBackend.Local. Phase 2 added Provider.HTTP for direct Claude API integration.
+
+  This phase adds Provider.External — the critical middle layer that connects the orchestration
+  engine to sidecar-connected agents via the Gateway. Without this, the sidecar and Gateway
+  infrastructure have no way to receive work from Cortex's orchestration layer.
+
+  ## Why This Matters
+
+  Today, all three orchestration modes (DAG, mesh, gossip) ultimately call Provider.CLI, which
+  opens a local `claude -p` Erlang port. Provider.External gives them an alternative: dispatch
+  work to an agent running anywhere, as long as it has a sidecar connected to the Gateway.
+
+  The deployment model is the same as mesh — Cortex spawns agents, they do their work, results
+  come back. The difference is the control plane goes through the sidecar (gRPC) instead of
+  an Erlang port (stdin/stdout). For local CLI mode this is overkill, but it proves the full
+  dispatch path works end-to-end and is the foundation for remote backends (Docker, K8s) in
+  the next phase.
+
+  ## What Exists Today
+
+  ### Provider Infrastructure (Phase 1)
+
+  - `lib/cortex/provider.ex` — Provider behaviour with callbacks:
+    - `start(config) :: {:ok, handle}`
+    - `run(handle, prompt, opts) :: {:ok, TeamResult.t()}`
+    - `stop(handle) :: :ok`
+    - Optional: `stream/3`, `resume/2`
+  - `lib/cortex/provider/cli.ex` — CLI implementation (reference)
+  - `lib/cortex/provider/resolver.ex` — resolves provider module from config
+    - Already maps `:external` → `Cortex.Provider.External` (module doesn't exist yet)
+
+  ### Gateway Infrastructure (Cluster Mode)
+
+  - `lib/cortex/gateway/registry.ex` — GenServer tracking registered agents
+    - `register/3` / `register_grpc/3` — register an agent (WebSocket or gRPC)
+    - `list/1` — all registered agents
+    - `get/2` — lookup agent by ID
+    - `list_by_capability/2` — find agents by capability string
+    - `get_push_pid/2` — returns `{:ok, {transport, pid}}` for pushing messages
+    - `get_channel/2` — get WebSocket channel pid
+    - `get_stream/2` — get gRPC stream pid
+    - `update_status/3` — update agent status (:idle, :working, etc.)
+    - `route_task_result/2` — **NO-OP PLACEHOLDER** — needs to be wired
+  - `lib/cortex/gateway/registered_agent.ex` — struct with id, name, role,
+    capabilities, status, transport, channel_pid, stream_pid, load, etc.
+  - `lib/cortex/gateway/grpc_server.ex` — bidirectional gRPC stream handling
+    - Receives `TaskResult` from sidecar → calls `route_task_result/2`
+    - Can push `TaskRequest` to sidecar via the stream pid
+
+  ### Go Sidecar (fully built)
+
+  - `sidecar/` — Go binary that:
+    - Connects to Gateway via gRPC bidirectional stream
+    - Sends `RegisterRequest` on boot
+    - Exposes HTTP API for agent process: `GET /task`, `POST /task/result`
+    - Handles heartbeats, status updates, message routing
+
+  ### Proto Contract
+
+  - `proto/cortex/gateway/v1/gateway.proto` — defines:
+    - `TaskRequest` — task_id, prompt, config, metadata
+    - `TaskResult` — task_id, status, result, tokens, cost
+    - `AgentMessage` / `GatewayMessage` — bidirectional envelopes
+
+  ## The Dispatch Flow
+
+  This is what Provider.External implements:
+
+  ```
+  Orchestrator calls Provider.External.run/3
+    │
+    ├─ 1. Register a pending task (task_id → caller ref)
+    ├─ 2. Find agent in Registry by name
+    ├─ 3. Get push pid via Registry.get_push_pid/2
+    ├─ 4. Build TaskRequest message
+    ├─ 5. Push TaskRequest to agent via gRPC stream / WebSocket channel
+    ├─ 6. Block waiting for TaskResult callback
+    │
+    │  ... agent does work via sidecar ...
+    │
+    ├─ 7. Sidecar sends TaskResult → GrpcServer → route_task_result/2
+    ├─ 8. route_task_result/2 looks up pending task, sends result to caller
+    └─ 9. Provider.External converts TaskResult → TeamResult, returns
+  ```
+
+  ## Design Decisions
+
+  ### Agent Lookup: By Name, Not Capability
+
+  For this phase, Provider.External looks up agents by name — the orchestrator knows which
+  agent it spawned and which name it registered with. Capability-based discovery (find me
+  any agent that can do X) is a future enhancement. The lookup is:
+
+  ```elixir
+  Registry.list() |> Enum.find(& &1.name == agent_name)
+  ```
+
+  ### Pending Task Registry
+
+  We need a way for route_task_result/2 to find the caller that's waiting for a specific
+  task's result. Options:
+
+  1. **ETS table** — task_id → caller pid/ref, lock-free reads
+  2. **GenServer** — simple but adds serialization
+  3. **Process dictionary on the provider** — too fragile
+
+  Recommend ETS for simplicity and concurrent access. A small module
+  (`Provider.External.PendingTasks`) wraps the ETS operations.
+
+  ### Message Format
+
+  TaskRequest pushed to the agent should include:
+  - `task_id` — unique ID for correlating the result
+  - `prompt` — the agent's prompt text
+  - `team_name` — for identification
+  - `model` — which model to use
+  - `max_turns` — turn limit
+  - `config` — any additional config the agent needs
+
+  TaskResult coming back should include:
+  - `task_id` — correlates with the request
+  - `status` — success/failure
+  - `result` — the agent's output text
+  - `input_tokens` / `output_tokens` — token usage
+  - `cost_usd` — cost
+  - `duration_ms` — how long the agent took
+
+  ### No Discovery Module
+
+  There is no separate Gateway.Discovery module. Provider.External queries Registry
+  directly. Discovery/load-balancing/health-aware routing can be extracted later when
+  the routing logic gets complex enough to warrant it.
+
+  ## Existing Modules (reference)
+
+  - `lib/cortex/provider.ex` — Provider behaviour
+  - `lib/cortex/provider/cli.ex` — CLI provider (reference implementation)
+  - `lib/cortex/provider/resolver.ex` — maps :external → Provider.External
+  - `lib/cortex/gateway/registry.ex` — agent registry with push routing
+  - `lib/cortex/gateway/grpc_server.ex` — gRPC stream handler
+  - `lib/cortex/gateway/registered_agent.ex` — agent struct
+  - `lib/cortex/orchestration/team_result.ex` — TeamResult struct
+  - `lib/cortex/orchestration/spawner.ex` — existing spawner (facade for Provider.CLI)
+  - `lib/cortex/orchestration/runner/executor.ex` — DAG execution engine
+  - `lib/cortex/internal_agent/launcher.ex` — used by mesh/gossip to spawn agents
+  - `lib/cortex/telemetry.ex` — telemetry events
+
+  ## Coding Conventions
+  - @moduledoc, @doc, @spec on all public functions
+  - defstruct with @enforce_keys for required fields
+  - Pattern match in function heads
+  - Return {:ok, value} | {:error, reason} from fallible functions
+  - Tests mirror lib/ structure, use async: true where safe
+
+dependencies:
+  - docs/compute-spawning/PROJECT.md
+  - docs/compute-spawning/phase-1-foundation/kickoff.yaml
+
+plans_dir: docs/compute-spawning/phase-3-external-provider/plans
+content_dir: docs/compute-spawning/phase-3-external-provider/content
+
+teammates:
+  - role: "External Provider Engineer"
+    doc: external-provider.md
+    focus: |
+      Implement Provider.External and the pending task registry — the core dispatch
+      path from orchestrator to sidecar agent and back.
+
+      Files to create:
+      - `lib/cortex/provider/external.ex` — Provider.External implementation
+        - Implements the Provider behaviour
+        - `start/1` — initialize config, verify Gateway.Registry is running
+        - `run/3` — the main dispatch flow:
+          1. Generate a unique task_id
+          2. Register the task as pending (task_id → self() ref)
+          3. Find the target agent in Registry by name (from opts[:team_name])
+          4. Get push pid via Registry.get_push_pid/2
+          5. Build TaskRequest payload
+          6. Push TaskRequest to agent:
+             - For gRPC: send via the stream pid (Registry stores this)
+             - For WebSocket: send via the channel pid
+          7. Update agent status to :working via Registry.update_status/3
+          8. Block waiting for result message (receive with timeout)
+          9. On result: convert TaskResult → TeamResult, return {:ok, result}
+          10. On timeout: return {:error, :timeout}
+          11. Clean up pending task entry
+        - `stop/1` — cancel any pending tasks, clean up
+      - `lib/cortex/provider/external/pending_tasks.ex` — ETS-backed pending task registry
+        - `start_link/1` — create named ETS table
+        - `register_task(task_id, caller_pid, caller_ref)` — insert pending entry
+        - `resolve_task(task_id, result)` — look up caller, send result message, delete entry
+        - `cancel_task(task_id)` — remove without resolving
+        - `list_pending/0` — for debugging/monitoring
+        - Table type: :set with read_concurrency: true
+      - `test/cortex/provider/external_test.exs`
+      - `test/cortex/provider/external/pending_tasks_test.exs`
+
+      Key design decisions:
+      - The run/3 function blocks (via receive) until the result arrives or timeout.
+        This matches Provider.CLI's synchronous contract — the executor calls run/3
+        and gets back a TeamResult.
+      - PendingTasks is a lightweight GenServer that owns an ETS table. It's started
+        by the application supervisor alongside Gateway.Registry.
+      - Agent lookup is by name, not capability. The orchestrator knows which agent
+        it's targeting.
+      - Emit telemetry events: task_dispatched, task_completed, task_timeout.
+
+  - role: "Task Routing Engineer"
+    doc: task-routing.md
+    focus: |
+      Wire route_task_result/2 to actually deliver results, and handle the push side
+      of sending TaskRequest to agents via their transport (gRPC or WebSocket).
+
+      Files to modify:
+      - `lib/cortex/gateway/registry.ex` — replace the route_task_result/2 no-op
+        - Look up the task in PendingTasks by task_id
+        - Call PendingTasks.resolve_task/2 to deliver the result to the waiting caller
+        - Log and emit telemetry on success/failure
+        - Handle case where task_id is unknown (agent sent unsolicited result)
+
+      Files to create:
+      - `lib/cortex/provider/external/task_push.ex` — push TaskRequest to agents
+        - `push(transport, pid, task_request)` — send task to agent via appropriate transport
+        - For gRPC: encode and send via the bidirectional stream pid
+          - The gRPC stream handler already supports sending messages to agents
+          - Build an `AgentMessage` envelope with a `TaskRequest` payload
+        - For WebSocket: send via Phoenix.Channel push
+          - Build a "task_request" event with the task payload
+        - Handle send failures (pid dead, stream closed) → return {:error, reason}
+      - `test/cortex/provider/external/task_push_test.exs`
+
+      Files to modify for integration:
+      - `lib/cortex/gateway/grpc_server.ex` — verify TaskResult handling calls
+        route_task_result/2 correctly (it likely already does, just confirm)
+      - `lib/cortex_web/channels/agent_channel.ex` — add handler for incoming
+        "task_result" events that calls route_task_result/2 (if not already there)
+
+      Integration test:
+      - `test/cortex/provider/external/integration_test.exs` — end-to-end test
+        - Start Gateway.Registry and PendingTasks
+        - Register a mock agent (fake gRPC stream pid)
+        - Call Provider.External.run/3 in a Task
+        - Simulate the agent sending back a TaskResult via route_task_result/2
+        - Assert the run/3 call returns the correct TeamResult
+        - Test timeout behavior
+        - Test agent-not-found behavior
