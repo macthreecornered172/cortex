@@ -19,11 +19,16 @@ defmodule CortexWeb.RunDetail.MembershipTab do
   attr(:team_runs, :list, required: true)
   attr(:last_seen, :map, required: true)
   attr(:pid_status, :map, required: true)
+  attr(:message_flows, :map, default: %{flows: [], total: 0, by_agent: %{}})
 
   def membership_tab(assigns) do
     mesh_info = Helpers.parse_mesh_info(assigns.run)
     visible_runs = Enum.reject(assigns.team_runs, & &1.internal)
-    assigns = assign(assigns, mesh_info: mesh_info, visible_runs: visible_runs)
+    max_flow = case assigns.message_flows.flows do
+      [top | _] -> top.count
+      [] -> 1
+    end
+    assigns = assign(assigns, mesh_info: mesh_info, visible_runs: visible_runs, max_flow: max_flow)
 
     ~H"""
     <div>
@@ -64,6 +69,50 @@ defmodule CortexWeb.RunDetail.MembershipTab do
               <p class="text-sm text-gray-400">{Helpers.truncate(@mesh_info.cluster_context, 300)}</p>
             </div>
           <% end %>
+        </div>
+      <% end %>
+
+      <%= if @message_flows.total > 0 do %>
+        <div class="bg-gray-900 rounded-lg border border-cortex-900/50 p-4 mb-6">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-medium text-cortex-400 uppercase tracking-wider">Communication</h2>
+            <span class="text-xs text-gray-500">{@message_flows.total} messages</span>
+          </div>
+
+          <%!-- Flow list --%>
+          <div class="space-y-1.5 mb-4">
+            <div
+              :for={flow <- Enum.take(@message_flows.flows, 12)}
+              class="flex items-center gap-2 text-sm"
+            >
+              <span class="text-white font-mono text-xs shrink-0 text-right truncate max-w-[10rem]" title={flow.from}>{flow.from}</span>
+              <span class="text-gray-600 shrink-0">-></span>
+              <span class="text-white font-mono text-xs shrink-0 truncate max-w-[10rem]" title={flow.to}>{flow.to}</span>
+              <div class="flex-1 h-2 bg-gray-800 rounded-full overflow-hidden">
+                <div
+                  class="h-full bg-cortex-600 rounded-full"
+                  style={"width: #{round(flow.count / @max_flow * 100)}%"}
+                />
+              </div>
+              <span class="text-gray-400 font-mono text-xs w-6 text-right">{flow.count}</span>
+            </div>
+          </div>
+
+          <%!-- Per-agent summary --%>
+          <div class="border-t border-gray-800 pt-3">
+            <div class="flex flex-wrap gap-3">
+              <div
+                :for={{name, stats} <- Enum.sort_by(@message_flows.by_agent, fn {_, s} -> -(s.sent + s.received) end)}
+                class="bg-gray-950 rounded px-3 py-2 text-xs"
+              >
+                <span class="text-white font-medium">{name}</span>
+                <div class="flex gap-3 mt-1 text-gray-500">
+                  <span><span class="text-cortex-400">{stats.sent}</span> sent</span>
+                  <span><span class="text-cortex-400">{stats.received}</span> recv</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       <% end %>
 

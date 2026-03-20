@@ -20,8 +20,9 @@ defmodule Cortex.InternalAgent.Summary do
 
   require Logger
 
-  @max_log_lines 50
-  @max_log_files 10
+  @max_log_lines 30
+  @max_log_files 8
+  @max_json_chars 8_000
 
   @doc """
   Generates an AI summary of the current run state.
@@ -92,17 +93,25 @@ defmodule Cortex.InternalAgent.Summary do
 
   defp gather_context(cortex_path) do
     %{
-      state: read_file(Path.join(cortex_path, "state.json")),
-      registry: read_file(Path.join(cortex_path, "registry.json")),
+      state: read_file(Path.join(cortex_path, "state.json"), @max_json_chars),
+      registry: read_file(Path.join(cortex_path, "registry.json"), @max_json_chars),
       logs: read_log_tails(Path.join(cortex_path, "logs"))
     }
   end
 
-  defp read_file(path) do
+  defp read_file(path, max_chars \\ nil) do
     case File.read(path) do
-      {:ok, content} -> content
+      {:ok, content} -> truncate_content(content, max_chars)
       _ -> nil
     end
+  end
+
+  defp truncate_content(content, nil), do: content
+
+  defp truncate_content(content, max) when byte_size(content) <= max, do: content
+
+  defp truncate_content(content, max) do
+    String.slice(content, 0, max) <> "\n... [truncated, #{byte_size(content)} bytes total]"
   end
 
   defp read_log_tails(logs_dir) do

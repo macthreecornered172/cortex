@@ -55,6 +55,7 @@ defmodule CortexWeb.RunDetailLive do
            page_title: "Run Not Found",
            current_tab: "overview",
            last_seen: %{},
+           message_flows: %{flows: [], total: 0, by_agent: %{}},
            selected_log_team: nil,
            log_lines: nil,
            log_sort: :desc,
@@ -116,6 +117,7 @@ defmodule CortexWeb.RunDetailLive do
            page_title: "Run: #{run.name}",
            current_tab: "overview",
            last_seen: %{},
+           message_flows: %{flows: [], total: 0, by_agent: %{}},
            log_sort: :desc,
            selected_log_team: nil,
            log_lines: nil,
@@ -644,6 +646,16 @@ defmodule CortexWeb.RunDetailLive do
     job = socket.assigns.selected_run_job
     log = if job && job.log_path, do: parse_run_job_log(job.log_path), else: nil
     {:noreply, assign(socket, run_job_log: log)}
+  end
+
+  def handle_event("switch_tab", %{"tab" => "membership"}, socket) do
+    run = socket.assigns.run
+    agent_names = socket.assigns.team_names
+
+    flows =
+      Helpers.aggregate_message_flows(run && run.workspace_path, agent_names)
+
+    {:noreply, assign(socket, current_tab: "membership", message_flows: flows)}
   end
 
   def handle_event("switch_tab", %{"tab" => tab}, socket) do
@@ -1549,7 +1561,7 @@ defmodule CortexWeb.RunDetailLive do
       </div>
 
       <div :if={@current_tab == "membership"}>
-        <.membership_tab run={@run} team_runs={@team_runs} last_seen={@last_seen} pid_status={@pid_status} />
+        <.membership_tab run={@run} team_runs={@team_runs} last_seen={@last_seen} pid_status={@pid_status} message_flows={@message_flows} />
       </div>
 
       <div :if={@current_tab == "knowledge"}>

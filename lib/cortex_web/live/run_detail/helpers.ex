@@ -523,4 +523,56 @@ defmodule CortexWeb.RunDetail.Helpers do
   def confidence_label_class(c) when c >= 0.8, do: "text-green-400"
   def confidence_label_class(c) when c >= 0.5, do: "text-yellow-400"
   def confidence_label_class(_), do: "text-red-400"
+
+  # -- Message flow helpers --
+
+  @doc """
+  Reads all agent outboxes from a workspace and aggregates message flows.
+
+  Returns a map with:
+    - `:flows` — list of `%{from, to, count}` sorted by count desc
+    - `:total` — total message count
+    - `:by_agent` — `%{agent_name => %{sent: n, received: n}}`
+  """
+  @spec aggregate_message_flows(String.t() | nil, [String.t()]) :: map()
+  def aggregate_message_flows(nil, _agent_names), do: %{flows: [], total: 0, by_agent: %{}}
+
+  def aggregate_message_flows(workspace_path, agent_names) do
+    alias Cortex.Messaging.InboxBridge
+
+    all_messages =
+      Enum.flat_map(agent_names, fn name ->
+        case InboxBridge.read_outbox(workspace_path, name) do
+          {:ok, msgs} -> Enum.map(msgs, fn m -> normalize_message(m, name) end)
+          _ -> []
+        end
+      end)
+
+    flow_counts =
+      all_messages
+      |> Enum.filter(fn m -> m.from && m.to end)
+      |> Enum.group_by(fn m -> {m.from, m.to} end)
+      |> Enum.map(fn {{from, to}, msgs} -> %{from: from, to: to, count: length(msgs)} end)
+      |> Enum.sort_by(& &1.count, :desc)
+
+    by_agent =
+      Enum.reduce(flow_counts, %{}, fn %{from: from, to: to, count: c}, acc ->
+        acc
+        |> Map.update(from, %{sent: c, received: 0}, fn a -> %{a | sent: a.sent + c} end)
+        |> Map.update(to, %{sent: 0, received: c}, fn a -> %{a | received: a.received + c} end)
+      end)
+
+    %{
+      flows: flow_counts,
+      total: Enum.sum(Enum.map(flow_counts, & &1.count)),
+      by_agent: by_agent
+    }
+  end
+
+  defp normalize_message(msg, fallback_from) do
+    %{
+      from: Map.get(msg, "from") || Map.get(msg, :from) || fallback_from,
+      to: Map.get(msg, "to") || Map.get(msg, :to)
+    }
+  end
 end
