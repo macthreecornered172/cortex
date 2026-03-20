@@ -39,6 +39,7 @@ defmodule CortexWeb.RunDetail.ActivityTab do
         </form>
         <span class="text-xs text-gray-600 ml-auto">{length(@visible)} events</span>
       </div>
+      <p class="text-xs text-gray-600 mb-3">In-memory only — clears on page refresh.</p>
       <%= if @visible == [] do %>
         <p class="text-gray-500 text-sm">No activity yet. Events appear here in real-time and clear on page reload.</p>
       <% else %>
