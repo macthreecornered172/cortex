@@ -661,8 +661,22 @@ defmodule CortexWeb.RunDetailLive do
     {:noreply, assign(socket, current_tab: "membership", message_flows: flows)}
   end
 
+  def handle_event("switch_tab", %{"tab" => "knowledge"}, socket) do
+    run = socket.assigns.run
+    agent_names = socket.assigns.team_names
+
+    flows =
+      Helpers.aggregate_message_flows(run && run.workspace_path, agent_names)
+
+    {:noreply, assign(socket, current_tab: "knowledge", message_flows: flows)}
+  end
+
   def handle_event("set_membership_view", %{"view" => view}, socket) do
     {:noreply, assign(socket, membership_view: view)}
+  end
+
+  def handle_event("set_knowledge_view", %{"view" => view}, socket) do
+    {:noreply, assign(socket, knowledge_view: view)}
   end
 
   def handle_event("select_graph_node", %{"name" => ""}, socket) do
@@ -1582,7 +1596,7 @@ defmodule CortexWeb.RunDetailLive do
       </div>
 
       <div :if={@current_tab == "knowledge"}>
-        <.knowledge_tab run={@run} team_runs={@team_runs} gossip_round={@gossip_round} gossip_knowledge={@gossip_knowledge} />
+        <.knowledge_tab run={@run} team_runs={@team_runs} gossip_round={@gossip_round} gossip_knowledge={@gossip_knowledge} message_flows={assigns[:message_flows] || %{flows: [], total: 0, by_agent: %{}}} knowledge_view={assigns[:knowledge_view] || "list"} selected_graph_node={assigns[:selected_graph_node]} />
       </div>
 
       <div :if={@current_tab == "activity"}>

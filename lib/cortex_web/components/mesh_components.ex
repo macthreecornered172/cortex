@@ -351,6 +351,77 @@ defmodule CortexWeb.MeshComponents do
     """
   end
 
+  # -- Message Flow Summary --
+
+  @doc """
+  Renders message flow bars and per-agent sent/received summary.
+
+  Shared between mesh membership and gossip knowledge tabs.
+  Theme controls accent colors: "cyan", "emerald", or "purple".
+  """
+  attr(:message_flows, :map, required: true)
+  attr(:theme, :string, default: "cyan")
+
+  @flow_themes %{
+    "cyan" => %{border: "border-cortex-900/50", heading: "text-cortex-400", bar: "bg-cortex-600", stat: "text-cortex-400"},
+    "emerald" => %{border: "border-emerald-900/50", heading: "text-emerald-400", bar: "bg-emerald-600", stat: "text-emerald-400"},
+    "purple" => %{border: "border-purple-900/50", heading: "text-purple-400", bar: "bg-purple-600", stat: "text-purple-400"}
+  }
+
+  def message_flow_summary(assigns) do
+    if assigns.message_flows.total == 0 do
+      ~H""
+    else
+      ft = Map.get(@flow_themes, assigns.theme, @flow_themes["cyan"])
+      max_flow = case assigns.message_flows.flows do
+        [top | _] -> max(top.count, 1)
+        [] -> 1
+      end
+
+      assigns =
+        assigns
+        |> assign(:ft, ft)
+        |> assign(:max_flow, max_flow)
+
+      ~H"""
+      <div class={["bg-gray-900 rounded-lg border p-4", @ft.border]}>
+        <div class="flex items-center justify-between mb-3">
+          <h2 class={["text-sm font-medium uppercase tracking-wider", @ft.heading]}>Communication</h2>
+          <span class="text-xs text-gray-500">{@message_flows.total} messages</span>
+        </div>
+        <div class="space-y-1.5 mb-4">
+          <div
+            :for={flow <- Enum.take(@message_flows.flows, 12)}
+            class="flex items-center gap-2 text-sm"
+          >
+            <span class="text-white font-mono text-xs shrink-0 text-right truncate max-w-[10rem]" title={flow.from}>{flow.from}</span>
+            <span class="text-gray-600 shrink-0">-></span>
+            <span class="text-white font-mono text-xs shrink-0 truncate max-w-[10rem]" title={flow.to}>{flow.to}</span>
+            <div class="flex-1 h-2 bg-gray-800 rounded-full overflow-hidden">
+              <div class={["h-full rounded-full", @ft.bar]} style={"width: #{round(flow.count / @max_flow * 100)}%"} />
+            </div>
+            <span class="text-gray-400 font-mono text-xs w-6 text-right">{flow.count}</span>
+          </div>
+        </div>
+        <div class="border-t border-gray-800 pt-3">
+          <div class="flex flex-wrap gap-3">
+            <div
+              :for={{name, stats} <- Enum.sort_by(@message_flows.by_agent, fn {_, s} -> -(s.sent + s.received) end)}
+              class="bg-gray-950 rounded px-3 py-2 text-xs"
+            >
+              <span class="text-white font-medium">{name}</span>
+              <div class="flex gap-3 mt-1 text-gray-500">
+                <span><span class={@ft.stat}>{stats.sent}</span> sent</span>
+                <span><span class={@ft.stat}>{stats.received}</span> recv</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      """
+    end
+  end
+
   # -- Communication Graph (animated) --
 
   @doc """
@@ -370,6 +441,13 @@ defmodule CortexWeb.MeshComponents do
   attr(:message_flows, :map, required: true)
   attr(:selected_node, :string, default: nil)
   attr(:run_status, :string, default: "running")
+  attr(:theme, :string, default: "cyan")
+
+  @themes %{
+    "cyan" => %{edge: "#22d3ee", edge_light: "#67e8f9", glow: "#22d3ee", badge_bg: "#0e7490", badge_border: "#22d3ee", arrow: "#22d3ee", selected_bg: "#0c4a6e", selected_border: "#22d3ee", text: "text-cortex-400"},
+    "emerald" => %{edge: "#34d399", edge_light: "#6ee7b7", glow: "#34d399", badge_bg: "#065f46", badge_border: "#34d399", arrow: "#34d399", selected_bg: "#064e3b", selected_border: "#34d399", text: "text-emerald-400"},
+    "purple" => %{edge: "#c084fc", edge_light: "#d8b4fe", glow: "#c084fc", badge_bg: "#6b21a8", badge_border: "#c084fc", arrow: "#c084fc", selected_bg: "#581c87", selected_border: "#c084fc", text: "text-purple-400"}
+  }
 
   def communication_graph(assigns) do
     count = length(assigns.agents)
@@ -377,6 +455,7 @@ defmodule CortexWeb.MeshComponents do
     if count == 0 do
       ~H""
     else
+      colors = Map.get(@themes, assigns.theme, @themes["cyan"])
       cx = 250
       cy = 250
       r = if(count <= 4, do: 140, else: 180)
@@ -498,6 +577,7 @@ defmodule CortexWeb.MeshComponents do
         |> assign(:nodes, nodes)
         |> assign(:has_traffic, has_traffic)
         |> assign(:animate, has_traffic and run_active)
+        |> assign(:c, colors)
         |> assign(:selected_flows, selected_flows)
         |> assign(:selected_agent, selected_agent)
         |> assign(:selected_stats, selected_stats)
@@ -506,8 +586,8 @@ defmodule CortexWeb.MeshComponents do
       <div class="flex gap-3 items-start">
       <svg viewBox="0 0 500 500" class={["aspect-square", if(@selected_agent, do: "w-2/3", else: "w-full max-w-xl mx-auto")]} role="img" aria-label="Agent communication graph">
         <defs>
-          <marker id="flow-arrow" markerWidth="6" markerHeight="4" refX="6" refY="2" orient="auto">
-            <polygon points="0 0, 6 2, 0 4" fill="#22d3ee" opacity="0.6" />
+          <marker id={"flow-arrow-#{@theme}"} markerWidth="6" markerHeight="4" refX="6" refY="2" orient="auto">
+            <polygon points="0 0, 6 2, 0 4" fill={@c.arrow} opacity="0.6" />
           </marker>
         </defs>
         <style>
@@ -544,22 +624,22 @@ defmodule CortexWeb.MeshComponents do
               <% speed_class = if edge.count > edge.max * 0.5, do: "flow-edge", else: "flow-edge-slow" %>
               <line
                 x1={edge.x1} y1={edge.y1} x2={edge.x2} y2={edge.y2}
-                stroke="#22d3ee" stroke-width={width} stroke-opacity={opacity}
+                stroke={@c.edge} stroke-width={width} stroke-opacity={opacity}
                 class={speed_class}
-                marker-end="url(#flow-arrow)"
+                marker-end={"url(#flow-arrow-#{@theme})"}
               />
             <% else %>
               <line
                 x1={edge.x1} y1={edge.y1} x2={edge.x2} y2={edge.y2}
-                stroke="#22d3ee" stroke-width={width} stroke-opacity={opacity}
-                marker-end="url(#flow-arrow)"
+                stroke={@c.edge} stroke-width={width} stroke-opacity={opacity}
+                marker-end={"url(#flow-arrow-#{@theme})"}
               />
             <% end %>
           </g>
           <%!-- Traveling particles (only when running) --%>
           <%= if @animate do %>
             <% dur = particle_dur(edge.count, edge.max) %>
-            <circle r="3" fill="#22d3ee">
+            <circle r="3" fill={@c.edge}>
               <animateMotion
                 dur={dur}
                 repeatCount="indefinite"
@@ -575,7 +655,7 @@ defmodule CortexWeb.MeshComponents do
             </circle>
             <%= if edge.count > edge.max * 0.4 do %>
               <% delay = particle_delay(edge.count, edge.max) %>
-              <circle r="2" fill="#67e8f9">
+              <circle r="2" fill={@c.edge_light}>
                 <animateMotion
                   dur={dur}
                   begin={delay}
@@ -606,21 +686,21 @@ defmodule CortexWeb.MeshComponents do
             <circle
               :if={node.selected}
               cx={node.x} cy={node.y} r="32"
-              fill="none" stroke="#22d3ee" stroke-width="2"
+              fill="none" stroke={@c.selected_border} stroke-width="2"
               stroke-dasharray="4 2" opacity="0.7"
             />
             <%!-- Glow for active agents --%>
             <circle
               :if={node.total > 0 and not node.selected}
               cx={node.x} cy={node.y} r="30"
-              fill="none" stroke="#22d3ee" stroke-width="1"
+              fill="none" stroke={@c.glow} stroke-width="1"
               opacity="0.2"
             />
             <%!-- Main circle --%>
             <circle
               cx={node.x} cy={node.y} r="24"
-              fill={if(node.selected, do: "#0c4a6e", else: StatusComponents.svg_fill(node.status))}
-              stroke={if(node.selected, do: "#22d3ee", else: if(node.total > 0, do: "#22d3ee", else: StatusComponents.svg_stroke(node.status)))}
+              fill={if(node.selected, do: @c.selected_bg, else: StatusComponents.svg_fill(node.status))}
+              stroke={if(node.selected, do: @c.selected_border, else: if(node.total > 0, do: @c.glow, else: StatusComponents.svg_stroke(node.status)))}
               stroke-width={if(node.selected, do: "2.5", else: if(node.total > 0, do: "2", else: "1.5"))}
             />
             <%!-- Label --%>
@@ -634,7 +714,7 @@ defmodule CortexWeb.MeshComponents do
             </text>
             <%!-- Message count badge --%>
             <g :if={node.total > 0}>
-              <circle cx={node.x + 18} cy={node.y - 18} r="8" fill="#0e7490" stroke="#22d3ee" stroke-width="1" />
+              <circle cx={node.x + 18} cy={node.y - 18} r="8" fill={@c.badge_bg} stroke={@c.badge_border} stroke-width="1" />
               <text x={node.x + 18} y={node.y - 15} text-anchor="middle" fill="white" font-size="8" font-weight="bold">
                 {node.total}
               </text>
@@ -644,14 +724,14 @@ defmodule CortexWeb.MeshComponents do
 
         <%!-- Legend --%>
         <g :if={@has_traffic} transform="translate(10, 470)">
-          <line x1="0" y1="0" x2="20" y2="0" stroke="#22d3ee" stroke-width="2" class="flow-edge" marker-end="url(#flow-arrow)" />
+          <line x1="0" y1="0" x2="20" y2="0" stroke={@c.edge} stroke-width="2" class="flow-edge" marker-end={"url(#flow-arrow-#{@theme})"} />
           <text x="28" y="4" fill="#9ca3af" font-size="10">message flow</text>
         </g>
       </svg>
 
       <%!-- Detail sidebar for selected node --%>
       <%= if @selected_agent do %>
-        <div class="w-1/3 bg-gray-950 rounded-lg border border-cortex-800 px-3 py-3 text-xs shrink-0">
+        <div class={["w-1/3 bg-gray-950 rounded-lg border px-3 py-3 text-xs shrink-0", if(@theme == "purple", do: "border-purple-800", else: if(@theme == "emerald", do: "border-emerald-800", else: "border-cortex-800"))]}>
           <div class="flex items-center justify-between mb-2">
             <div class="flex items-center gap-1.5">
               <StatusComponents.status_dot status={@selected_agent.status} pulse={@selected_agent.status in ["running", "alive"]} />

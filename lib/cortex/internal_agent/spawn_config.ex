@@ -33,6 +33,7 @@ defmodule Cortex.InternalAgent.SpawnConfig do
     :on_token_update,
     :on_activity,
     :on_port_opened,
+    :system_prompt,
     command: "claude"
   ]
 
@@ -48,7 +49,8 @@ defmodule Cortex.InternalAgent.SpawnConfig do
           command: String.t(),
           on_token_update: (String.t(), map() -> any()) | nil,
           on_activity: (String.t(), map() -> any()) | nil,
-          on_port_opened: (String.t(), pid() | nil -> any()) | nil
+          on_port_opened: (String.t(), pid() | nil -> any()) | nil,
+          system_prompt: String.t() | nil
         }
 
   @doc """
@@ -73,6 +75,7 @@ defmodule Cortex.InternalAgent.SpawnConfig do
     |> maybe_add(:on_token_update, config.on_token_update)
     |> maybe_add(:on_activity, config.on_activity)
     |> maybe_add(:on_port_opened, config.on_port_opened)
+    |> maybe_add(:system_prompt, config.system_prompt)
   end
 
   @doc """

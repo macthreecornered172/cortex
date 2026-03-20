@@ -125,12 +125,16 @@ defmodule Cortex.Provider.CLI do
     on_token_update = Keyword.get(opts, :on_token_update)
     on_activity = Keyword.get(opts, :on_activity)
 
+    system_prompt = Keyword.get(opts, :system_prompt)
+
     args =
       if session_id do
         build_resume_args(session_id, prompt)
       else
         build_args(prompt, model, max_turns, permission_mode)
       end
+
+    args = if system_prompt, do: args ++ ["--system-prompt", system_prompt], else: args
 
     timeout_ms = round(timeout_minutes * 60 * 1_000)
 

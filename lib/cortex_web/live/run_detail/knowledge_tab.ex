@@ -7,6 +7,8 @@ defmodule CortexWeb.RunDetail.KnowledgeTab do
   """
   use Phoenix.Component
 
+  import CortexWeb.MeshComponents, only: [communication_graph: 1, message_flow_summary: 1]
+
   alias CortexWeb.RunDetail.Helpers
 
   @doc """
@@ -16,10 +18,14 @@ defmodule CortexWeb.RunDetail.KnowledgeTab do
   attr(:team_runs, :list, required: true)
   attr(:gossip_round, :any, default: nil)
   attr(:gossip_knowledge, :any, default: nil)
+  attr(:message_flows, :map, default: %{flows: [], total: 0, by_agent: %{}})
+  attr(:knowledge_view, :string, default: "list")
+  attr(:selected_graph_node, :string, default: nil)
 
   def knowledge_tab(assigns) do
     gossip_info = Helpers.parse_gossip_info(assigns.run)
-    assigns = assign(assigns, :gossip_info, gossip_info)
+    visible_runs = Enum.reject(assigns.team_runs, & &1.internal)
+    assigns = assign(assigns, gossip_info: gossip_info, visible_runs: visible_runs)
 
     ~H"""
     <div>
@@ -64,6 +70,50 @@ defmodule CortexWeb.RunDetail.KnowledgeTab do
           </div>
         </div>
 
+        <%!-- View toggle --%>
+        <div class="flex items-center gap-1 mb-4 bg-gray-900 rounded-lg border border-gray-800 p-1 w-fit">
+          <button
+            phx-click="set_knowledge_view"
+            phx-value-view="list"
+            class={[
+              "px-3 py-1.5 text-sm rounded-md transition-colors",
+              if(@knowledge_view == "list", do: "bg-gray-700 text-white", else: "text-gray-400 hover:text-gray-300")
+            ]}
+          >
+            Knowledge
+          </button>
+          <button
+            phx-click="set_knowledge_view"
+            phx-value-view="graph"
+            class={[
+              "px-3 py-1.5 text-sm rounded-md transition-colors",
+              if(@knowledge_view == "graph", do: "bg-gray-700 text-white", else: "text-gray-400 hover:text-gray-300")
+            ]}
+          >
+            Graph
+          </button>
+        </div>
+
+        <%!-- Graph view --%>
+        <div :if={@knowledge_view == "graph"}>
+          <%= if length(@visible_runs) >= 2 do %>
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4">
+              <.communication_graph
+                agents={Enum.map(@visible_runs, fn tr -> %{name: tr.team_name, status: tr.status, role: tr.role} end)}
+                message_flows={@message_flows}
+                selected_node={@selected_graph_node}
+                run_status={@run.status}
+                theme="purple"
+              />
+            </div>
+          <% end %>
+        </div>
+
+        <%!-- Knowledge view (default) --%>
+        <div :if={@knowledge_view == "list"}>
+        <div :if={@message_flows.total > 0} class="mb-4">
+          <.message_flow_summary message_flows={@message_flows} theme="purple" />
+        </div>
         <%= if @gossip_knowledge do %>
           <div class="bg-gray-900 rounded-lg border border-purple-900/50 p-4 mb-6">
             <div class="flex items-center gap-3 mb-3">
@@ -98,6 +148,7 @@ defmodule CortexWeb.RunDetail.KnowledgeTab do
             <p class="text-gray-500 text-sm">No knowledge data yet. Knowledge entries appear here after gossip rounds complete.</p>
           </div>
         <% end %>
+        </div>
       <% else %>
         <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
           <p class="text-gray-500 text-sm">No gossip configuration found.</p>

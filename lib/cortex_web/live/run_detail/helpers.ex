@@ -527,7 +527,7 @@ defmodule CortexWeb.RunDetail.Helpers do
   # -- Message flow helpers --
 
   @doc """
-  Reads all agent outboxes from a workspace and aggregates message flows.
+  Reads all agent inboxes and outboxes from a workspace and aggregates message flows.
 
   Returns a map with:
     - `:flows` — list of `%{from, to, count}` sorted by count desc
@@ -540,13 +540,28 @@ defmodule CortexWeb.RunDetail.Helpers do
   def aggregate_message_flows(workspace_path, agent_names) do
     alias Cortex.Messaging.InboxBridge
 
-    all_messages =
+    # Read outboxes (agent-initiated messages)
+    outbox_msgs =
       Enum.flat_map(agent_names, fn name ->
         case InboxBridge.read_outbox(workspace_path, name) do
           {:ok, msgs} -> Enum.map(msgs, fn m -> normalize_message(m, name) end)
           _ -> []
         end
       end)
+
+    # Read inboxes (captures knowledge exchange and coordinator deliveries)
+    inbox_msgs =
+      Enum.flat_map(agent_names, fn name ->
+        case InboxBridge.read_inbox(workspace_path, name) do
+          {:ok, msgs} -> Enum.map(msgs, fn m -> normalize_message(m, nil, name) end)
+          _ -> []
+        end
+      end)
+
+    # Merge and deduplicate by {from, to, content hash}
+    all_messages =
+      (outbox_msgs ++ inbox_msgs)
+      |> Enum.uniq_by(fn m -> {m.from, m.to, m.hash} end)
 
     flow_counts =
       all_messages
@@ -569,10 +584,11 @@ defmodule CortexWeb.RunDetail.Helpers do
     }
   end
 
-  defp normalize_message(msg, fallback_from) do
-    %{
-      from: Map.get(msg, "from") || Map.get(msg, :from) || fallback_from,
-      to: Map.get(msg, "to") || Map.get(msg, :to)
-    }
+  defp normalize_message(msg, fallback_from, fallback_to \\ nil) do
+    from = Map.get(msg, "from") || Map.get(msg, :from) || fallback_from
+    to = Map.get(msg, "to") || Map.get(msg, :to) || fallback_to
+    content = Map.get(msg, "content") || Map.get(msg, :content) || ""
+    hash = :erlang.phash2({from, to, String.slice(to_string(content), 0, 100)})
+    %{from: from, to: to, hash: hash}
   end
 end
