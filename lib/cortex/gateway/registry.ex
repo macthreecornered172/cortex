@@ -175,15 +175,54 @@ defmodule Cortex.Gateway.Registry do
   end
 
   @doc """
-  Routes a completed task result.
+  Routes a completed task result to the waiting caller.
 
-  This is a placeholder for Phase 3 orchestration integration. Currently a no-op
-  that returns `:ok`. The channel calls this when it receives a `"task_result"` message.
+  Looks up the task in `PendingTasks` by `task_id` and delivers the result to
+  the blocked `Provider.External.run/3` caller. Emits telemetry on success and
+  logs a warning for unknown task IDs.
+
+  This is a module-level function (not a GenServer call) to avoid serializing
+  result delivery through the Registry process. `PendingTasks` uses ETS with
+  `read_concurrency: true` under the hood.
+
+  ## Returns
+
+    - `:ok` — result delivered to the waiting caller
+    - `{:error, :unknown_task}` — no pending task with the given ID
+
   """
-  @spec route_task_result(String.t(), map()) :: :ok
-  def route_task_result(_task_id, _result) do
-    Logger.debug("Gateway.Registry: route_task_result called (no-op in Phase 1)")
-    :ok
+  @spec route_task_result(String.t(), map()) :: :ok | {:error, :unknown_task}
+  def route_task_result(task_id, result) when is_binary(task_id) and is_map(result) do
+    alias Cortex.Provider.External.PendingTasks
+
+    if Process.whereis(PendingTasks) do
+      case PendingTasks.resolve_task(PendingTasks, task_id, result) do
+        :ok ->
+          Logger.debug("Gateway.Registry: routed task result for task_id=#{task_id}")
+
+          Cortex.Telemetry.emit_gateway_task_completed(%{
+            task_id: task_id,
+            status: Map.get(result, "status", "unknown"),
+            duration_ms: Map.get(result, "duration_ms", 0)
+          })
+
+          :ok
+
+        {:error, :not_found} ->
+          Logger.warning(
+            "Gateway.Registry: unsolicited task result for task_id=#{task_id} — " <>
+              "no pending task found"
+          )
+
+          {:error, :unknown_task}
+      end
+    else
+      Logger.warning(
+        "Gateway.Registry: PendingTasks not running, cannot route task_id=#{task_id}"
+      )
+
+      {:error, :unknown_task}
+    end
   end
 
   @doc """

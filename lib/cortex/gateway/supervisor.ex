@@ -38,6 +38,7 @@ defmodule Cortex.Gateway.Supervisor do
     children =
       [
         {Cortex.Gateway.Registry, []},
+        {Cortex.Provider.External.PendingTasks, []},
         {Cortex.Gateway.Health, []}
       ] ++ grpc_children(start_grpc, grpc_port)
 

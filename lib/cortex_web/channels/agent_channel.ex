@@ -245,12 +245,27 @@ defmodule CortexWeb.AgentChannel do
 
   defp handle_task_result(payload, socket) do
     case Protocol.validate_task_result(payload) do
-      {:ok, _task_result_msg} ->
+      {:ok, task_result_msg} ->
+        result_map = build_result_map(task_result_msg)
+        Registry.route_task_result(task_result_msg.task_id, result_map)
         {:reply, {:ok, %{}}, socket}
 
       {:error, reasons} ->
         {:reply, {:error, validation_error(reasons)}, socket}
     end
+  end
+
+  defp build_result_map(task_result_msg) do
+    result = task_result_msg.result || %{}
+    tokens = Map.get(result, "tokens", %{})
+
+    %{
+      "status" => task_result_msg.status,
+      "result_text" => Map.get(result, "text", ""),
+      "duration_ms" => Map.get(result, "duration_ms", 0),
+      "input_tokens" => Map.get(tokens, "input", 0),
+      "output_tokens" => Map.get(tokens, "output", 0)
+    }
   end
 
   defp handle_status_update(payload, socket) do

@@ -236,11 +236,6 @@ defmodule Cortex.Orchestration.Config.Validator do
     ["#{context}: invalid backend '#{inspect(backend)}', must be one of: #{valid}" | errors]
   end
 
-  # TODO(Phase 2): remove this gate when Provider.External ships
-  defp validate_external_blocked(errors, :external, context) do
-    ["#{context}: provider 'external' is not yet implemented" | errors]
-  end
-
   defp validate_external_blocked(errors, _provider, _context), do: errors
 
   # TODO(Future): remove this gate when Provider.HTTP ships

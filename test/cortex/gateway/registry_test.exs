@@ -2,6 +2,7 @@ defmodule Cortex.Gateway.RegistryTest do
   use ExUnit.Case, async: false
 
   alias Cortex.Gateway.{RegisteredAgent, Registry}
+  alias Cortex.Provider.External.PendingTasks
 
   setup do
     {:ok, pid} = Registry.start_link(name: :"registry_test_#{System.unique_integer()}")
@@ -327,8 +328,55 @@ defmodule Cortex.Gateway.RegistryTest do
   # -- route_task_result/2 --
 
   describe "route_task_result/2" do
-    test "returns :ok (Phase 1 no-op)" do
-      assert :ok = Registry.route_task_result("task-123", %{"text" => "result"})
+    # PendingTasks is started by Gateway.Supervisor, so it's already running.
+    # route_task_result/2 uses the default module name to call it.
+
+    test "delivers result to pending task caller and returns :ok" do
+      task_id = "route-test-#{System.unique_integer([:positive])}"
+      caller_ref = make_ref()
+
+      :ok =
+        PendingTasks.register_task(
+          PendingTasks,
+          task_id,
+          self(),
+          caller_ref,
+          "agent-1"
+        )
+
+      result = %{
+        "status" => "completed",
+        "result_text" => "All tests pass",
+        "duration_ms" => 1500,
+        "input_tokens" => 100,
+        "output_tokens" => 50
+      }
+
+      assert :ok = Registry.route_task_result(task_id, result)
+      assert_receive {:task_result, ^caller_ref, ^result}, 1000
+    end
+
+    test "returns {:error, :unknown_task} for unknown task_id" do
+      assert {:error, :unknown_task} =
+               Registry.route_task_result("nonexistent-task", %{"status" => "completed"})
+    end
+
+    test "returns {:error, :unknown_task} on double resolve" do
+      task_id = "double-resolve-#{System.unique_integer([:positive])}"
+      caller_ref = make_ref()
+
+      :ok =
+        PendingTasks.register_task(
+          PendingTasks,
+          task_id,
+          self(),
+          caller_ref,
+          "agent-1"
+        )
+
+      result = %{"status" => "completed", "result_text" => "done", "duration_ms" => 100}
+      assert :ok = Registry.route_task_result(task_id, result)
+      assert {:error, :unknown_task} = Registry.route_task_result(task_id, result)
     end
   end
 

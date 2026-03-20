@@ -393,9 +393,9 @@ defmodule Cortex.Orchestration.Config.LoaderTest do
               verify: "v"
       """
 
-      # Parses fine but validator will reject it
-      assert {:error, errors} = Loader.load_string(yaml)
-      assert Enum.any?(errors, &String.contains?(&1, "not yet implemented"))
+      assert {:ok, config, _warnings} = Loader.load_string(yaml)
+      assert config.defaults.provider == :external
+      assert config.defaults.backend == :docker
     end
   end
 
