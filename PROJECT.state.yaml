@@ -56,9 +56,11 @@ tracks:
         notes: "Provider.External — dispatch work to sidecar agents via Gateway, wire route_task_result"
       phase-3.5-external-agent:
         config: docs/compute-spawning/phase-3.5-external-agent/kickoff.yaml
-        status: in_progress
+        status: done
+        completed: 2026-03-22
+        commit: 5d7b9d9
         depends_on: [phase-3-external-provider]
-        notes: "ExternalAgent GenServer — Elixir-side counterpart to sidecar, bridges spawner to Provider.External"
+        notes: "ExternalAgent GenServer + executor integration + QE bug smash (3 crash fixes, 15 adversarial tests)"
       phase-4-remote-backends:
         config: docs/compute-spawning/phase-4-remote-backends/kickoff.yaml
         status: pending
