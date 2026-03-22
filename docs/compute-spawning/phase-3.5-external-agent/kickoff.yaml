@@ -1,0 +1,225 @@
+phase: "External Agent"
+
+goal: >
+  Build an ExternalAgent GenServer that bridges the spawner/control plane to
+  sidecar-connected agents. One GenServer per external agent — it owns the
+  relationship with its assigned sidecar, delegates work via Provider.External,
+  and monitors sidecar health via Gateway.Registry.
+
+system_context: |
+  ## Project Overview
+
+  Cortex is an Elixir/OTP multi-agent orchestration system. Phase 3 just shipped
+  Provider.External — a provider that dispatches TaskRequests to sidecar-connected
+  agents via the Gateway and blocks until results come back. But nothing manages
+  the sidecar lifecycle or bridges the spawner to Provider.External.
+
+  ## The Gap
+
+  Today's flow for external agents is fully manual:
+  1. Someone starts a Go sidecar → it registers in Gateway.Registry
+  2. Provider.External can dispatch to it by name
+  3. But nobody automates step 1, and nobody owns the sidecar relationship
+
+  The ExternalAgent GenServer closes this gap. It's the Elixir-side counterpart
+  to the sidecar — it knows which sidecar is "mine", monitors it, and provides
+  the run interface for the executor.
+
+  ## What Exists Today
+
+  ### Provider.External (Phase 3 — just shipped)
+
+  - `lib/cortex/provider/external.ex` — Provider behaviour implementation
+    - `start(config)` — validates Gateway.Registry is running, returns handle
+      Config keys: :registry, :timeout_ms, :pending_tasks, :push_fn
+    - `run(handle, prompt, opts)` — dispatches TaskRequest to agent by name,
+      blocks on receive until TaskResult arrives or timeout
+      Opts: :team_name (required), :timeout_ms (optional override)
+    - `stop(handle)` — no-op (stateless)
+  - `lib/cortex/provider/external/pending_tasks.ex` — ETS GenServer
+    - register_task/5, resolve_task/3, cancel_task/2, list_pending/1
+  - `lib/cortex/provider/external/task_push.ex` — stateless push module
+    - push(:grpc | :websocket, pid, task_request) :: {:ok, :sent} | {:error, term}
+
+  ### Gateway.Registry
+
+  - `lib/cortex/gateway/registry.ex` — GenServer tracking registered agents
+    - `list/1` — all registered agents (list of RegisteredAgent structs)
+    - `get/2` — lookup by agent ID
+    - `get_push_pid/2` — returns {:ok, {transport, pid}} for pushing messages
+    - `update_status/3` — update agent status (:idle, :working, etc.)
+    - `route_task_result/2` — delivers result to waiting Provider.External caller
+  - `lib/cortex/gateway/registered_agent.ex` — struct with:
+    id, name, role, capabilities, status, transport, channel_pid, stream_pid,
+    metadata, last_heartbeat, load
+
+  ### Executor (how providers are called)
+
+  ```elixir
+  # lib/cortex/orchestration/runner/executor.ex lines 454-480
+  provider_mod = ProviderResolver.resolve!(team, config.defaults)
+  provider_config = %{command: command, cwd: workspace.path}
+  run_opts = [team_name: team_name, model: model, max_turns: max_turns, ...]
+
+  with {:ok, handle} <- provider_mod.start(provider_config) do
+    try do
+      provider_mod.run(handle, prompt, run_opts)
+    after
+      provider_mod.stop(handle)
+    end
+  end
+  ```
+
+  The executor calls start/run/stop generically — it doesn't care which provider.
+  For Provider.External, the executor currently does this directly. The ExternalAgent
+  GenServer should sit between the executor and Provider.External, owning the
+  sidecar lifecycle.
+
+  ### Local Agent GenServers (separate system)
+
+  - `lib/cortex/agent/server.ex` — GenServer for local agents
+    - start_link, get_state, update_status, assign_work, stop
+  - `lib/cortex/agent/registry.ex` — Elixir Registry for local agent lookup
+  - `lib/cortex/agent/supervisor.ex` — DynamicSupervisor for local agents
+  - These are for local agents only, NOT for sidecar-connected agents.
+    ExternalAgent is a separate concept but can follow similar patterns.
+
+  ### InternalAgent.Launcher (current spawn pattern)
+
+  - `lib/cortex/internal_agent/launcher.ex`
+    - `run/1` — synchronous: Provider.CLI start → run → stop, blocks until done
+    - `run_async/1` — wraps run/1 in Task.async
+    - `stop/1` — yield 5s then brutal-kill
+
+  ### Go Sidecar
+
+  - `sidecar/` — Go binary that connects to Gateway via gRPC bidirectional stream
+  - Exposes HTTP API: GET /task (poll for work), POST /task/result (submit result)
+  - Also: /ask/{agentID}, /messages, /roster, /knowledge, /status
+
+  ## Design Decisions
+
+  ### Assume Sidecar Is Already Running
+
+  For this phase, ExternalAgent does NOT deploy the sidecar. It receives sidecar
+  connection info (name, gateway ref) and confirms the sidecar is registered.
+  Sidecar deployment is a SpawnBackend concern (Phase 4).
+
+  ### One GenServer Per Agent
+
+  Each ExternalAgent GenServer owns exactly one sidecar relationship. If you need
+  3 agents, you start 3 ExternalAgent GenServers. This mirrors the local Agent.Server
+  pattern.
+
+  ### Monitor Sidecar via Gateway.Registry
+
+  Gateway.Registry already monitors agent connections (channel_pid / stream_pid).
+  ExternalAgent can subscribe to Gateway events (PubSub broadcasts like
+  :agent_status_changed, :agent_disconnected) to track its sidecar's health.
+
+  ## Existing Modules (reference)
+
+  - `lib/cortex/provider/external.ex` — Provider.External
+  - `lib/cortex/provider/external/pending_tasks.ex` — PendingTasks ETS
+  - `lib/cortex/provider/external/task_push.ex` — TaskPush
+  - `lib/cortex/gateway/registry.ex` — Gateway agent registry
+  - `lib/cortex/gateway/registered_agent.ex` — RegisteredAgent struct
+  - `lib/cortex/agent/server.ex` — local Agent.Server (reference pattern)
+  - `lib/cortex/agent/config.ex` — local Agent.Config (reference pattern)
+  - `lib/cortex/agent/supervisor.ex` — local Agent.Supervisor (reference pattern)
+  - `lib/cortex/internal_agent/launcher.ex` — InternalAgent spawn pattern
+  - `lib/cortex/orchestration/runner/executor.ex` — executor provider call site
+  - `lib/cortex/orchestration/spawner.ex` — legacy CLI spawner facade
+  - `lib/cortex/telemetry.ex` — telemetry events
+
+  ## Coding Conventions
+  - @moduledoc, @doc, @spec on all public functions
+  - defstruct with @enforce_keys for required fields
+  - Pattern match in function heads
+  - Return {:ok, value} | {:error, reason} from fallible functions
+  - Tests mirror lib/ structure, use async: true where safe
+
+dependencies:
+  - docs/compute-spawning/PROJECT.md
+  - docs/compute-spawning/phase-3-external-provider/kickoff.yaml
+
+plans_dir: docs/compute-spawning/phase-3.5-external-agent/plans
+content_dir: docs/compute-spawning/phase-3.5-external-agent/content
+
+teammates:
+  - role: "ExternalAgent Engineer"
+    doc: external-agent.md
+    focus: |
+      Build the ExternalAgent GenServer and its supervisor — the Elixir-side
+      process that owns the relationship with a sidecar-connected agent.
+
+      Files to create:
+      - `lib/cortex/agent/external_agent.ex` — ExternalAgent GenServer
+        - `start_link(opts)` — opts include:
+          - `:name` — agent name (must match sidecar's registered name in Gateway)
+          - `:registry` — Gateway.Registry server ref (default: Gateway.Registry)
+          - `:timeout_ms` — default task timeout (default: 1_800_000)
+        - On init:
+          - Confirm agent with matching name exists in Gateway.Registry
+          - Store the agent's ID, transport info from RegisteredAgent
+          - Subscribe to Gateway PubSub for agent status events
+          - Return {:ok, state} or {:stop, :agent_not_found}
+        - `run(server, prompt, opts)` — GenServer.call that:
+          - Builds Provider.External config from stored state
+          - Delegates to Provider.External.run/3
+          - Returns {:ok, TeamResult.t()} | {:error, term()}
+        - `stop(server)` — graceful shutdown
+          - Unsubscribes from PubSub
+          - Optionally updates agent status in Registry
+        - `get_state(server)` — returns current state (agent info, status, health)
+        - Handle PubSub events:
+          - :agent_status_changed — update local state
+          - :agent_disconnected — log warning, mark unhealthy
+          - :agent_registered — if matching name, update connection info (reconnect)
+      - `lib/cortex/agent/external_supervisor.ex` — DynamicSupervisor for ExternalAgents
+        - `start_agent(opts)` — starts ExternalAgent under supervisor
+        - `stop_agent(name)` — stops by name
+        - `list_agents()` — all running external agents
+      - `test/cortex/agent/external_agent_test.exs`
+      - `test/cortex/agent/external_supervisor_test.exs`
+
+      Key design decisions:
+      - GenServer.call for run/3 so the caller blocks naturally
+      - Provider.External is the dispatch engine — ExternalAgent just wraps it
+        with lifecycle management and sidecar monitoring
+      - Uses Gateway PubSub (already exists) for sidecar health events
+      - Does NOT deploy sidecar — assumes it's already registered
+
+  - role: "Executor Integration Engineer"
+    doc: executor-integration.md
+    focus: |
+      Wire ExternalAgent into the executor flow so that `provider: external`
+      in YAML config automatically manages the sidecar lifecycle via ExternalAgent.
+
+      Files to modify:
+      - `lib/cortex/orchestration/runner/executor.ex` — update the provider
+        invocation path (around lines 454-480):
+        - When provider_mod is Provider.External:
+          1. Look up or start an ExternalAgent for this team_name
+          2. Call ExternalAgent.run(agent, prompt, opts) instead of the
+             generic provider_mod.start/run/stop pattern
+          3. The ExternalAgent handles Provider.External internally
+        - When provider_mod is NOT Provider.External:
+          - Keep existing generic start/run/stop path unchanged
+      - `lib/cortex/application.ex` — add ExternalSupervisor to the app
+        supervision tree (if not already started by Gateway.Supervisor)
+
+      Files to create:
+      - `test/cortex/orchestration/runner/executor_external_test.exs` — tests
+        for the executor → ExternalAgent path:
+        - Config with provider: external starts ExternalAgent
+        - ExternalAgent.run is called with correct prompt and opts
+        - Timeout and error handling work through the GenServer layer
+        - Provider: cli path is unchanged (regression test)
+
+      Integration test:
+      - Start Gateway.Registry, PendingTasks, ExternalSupervisor
+      - Register a mock sidecar agent
+      - Run a single-team DAG config with provider: external
+      - Verify the executor creates an ExternalAgent and dispatches correctly
+      - Verify cleanup on completion

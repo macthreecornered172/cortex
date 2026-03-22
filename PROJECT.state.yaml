@@ -12,7 +12,7 @@
 #   blocked     — explicitly blocked (see notes)
 
 project: cortex
-updated: 2026-03-19
+updated: 2026-03-22
 
 tracks:
   core-phases:
@@ -49,13 +49,20 @@ tracks:
         notes: "Provider.HTTP — call Claude Messages API directly with agentic loop"
       phase-3-external-provider:
         config: docs/compute-spawning/phase-3-external-provider/kickoff.yaml
-        status: in_progress
+        status: done
+        completed: 2026-03-19
+        commit: bbf680c
         depends_on: [phase-1-foundation]
         notes: "Provider.External — dispatch work to sidecar agents via Gateway, wire route_task_result"
+      phase-3.5-external-agent:
+        config: docs/compute-spawning/phase-3.5-external-agent/kickoff.yaml
+        status: in_progress
+        depends_on: [phase-3-external-provider]
+        notes: "ExternalAgent GenServer — Elixir-side counterpart to sidecar, bridges spawner to Provider.External"
       phase-4-remote-backends:
         config: docs/compute-spawning/phase-4-remote-backends/kickoff.yaml
         status: pending
-        depends_on: [phase-3-external-provider]
+        depends_on: [phase-3.5-external-agent]
         notes: "SpawnBackend.Docker and SpawnBackend.K8s with agent+sidecar co-deployment"
 
   cluster-mode:
