@@ -47,3 +47,8 @@ cortex-*.tar
 /test-strategy.md
 /tokens-rest.txt
 sidecar/bin/
+
+# Security: keys and secrets
+*.key
+*.pem
+*.secret
