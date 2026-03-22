@@ -14,9 +14,9 @@
 name: "external-simple"
 
 defaults:
-  model: sonnet
+  model: haiku
   max_turns: 10
-  permission_mode: acceptEdits
+  permission_mode: bypassPermissions
   timeout_minutes: 5
   provider: external
 

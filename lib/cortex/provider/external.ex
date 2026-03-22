@@ -225,11 +225,11 @@ defmodule Cortex.Provider.External do
       duration_ms: Map.get(result, "duration_ms"),
       input_tokens: Map.get(result, "input_tokens"),
       output_tokens: Map.get(result, "output_tokens"),
-      cost_usd: nil,
-      session_id: nil,
-      cache_read_tokens: nil,
-      cache_creation_tokens: nil,
-      num_turns: nil
+      cost_usd: Map.get(result, "cost_usd"),
+      session_id: Map.get(result, "session_id"),
+      cache_read_tokens: Map.get(result, "cache_read_tokens"),
+      cache_creation_tokens: Map.get(result, "cache_creation_tokens"),
+      num_turns: Map.get(result, "num_turns")
     }
   end
 

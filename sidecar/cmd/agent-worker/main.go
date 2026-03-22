@@ -79,15 +79,22 @@ func main() {
 
 		// Run claude -p with the task prompt
 		start := time.Now()
-		output, err := runClaude(claudeCmd, task.Prompt)
+		cr, err := runClaude(claudeCmd, task.Prompt)
 		duration := time.Since(start)
 
 		if err != nil {
 			logger.Error("claude failed", "task_id", task.TaskID, "error", err, "duration", duration)
-			submitResult(sidecarURL, task.TaskID, "failed", fmt.Sprintf("claude error: %v", err), duration, logger)
+			errResult := &claudeResult{ResultText: fmt.Sprintf("claude error: %v", err)}
+			submitResult(sidecarURL, task.TaskID, "failed", errResult, duration, logger)
 		} else {
-			logger.Info("claude completed", "task_id", task.TaskID, "duration", duration, "output_len", len(output))
-			submitResult(sidecarURL, task.TaskID, "completed", output, duration, logger)
+			logger.Info("claude completed",
+				"task_id", task.TaskID,
+				"duration", duration,
+				"input_tokens", cr.InputTokens,
+				"output_tokens", cr.OutputTokens,
+				"cost_usd", cr.CostUSD,
+			)
+			submitResult(sidecarURL, task.TaskID, "completed", cr, duration, logger)
 		}
 	}
 }
@@ -126,29 +133,133 @@ func pollTask(sidecarURL string) (*taskInfo, error) {
 
 // --- Claude execution ---
 
-func runClaude(command string, prompt string) (string, error) {
-	cmd := exec.Command(command, "-p", prompt, "--output-format", "text")
+// claudeResult holds the parsed output from a claude stream-json run.
+type claudeResult struct {
+	ResultText string
+	InputTokens int
+	OutputTokens int
+	CacheReadTokens int
+	CacheCreationTokens int
+	NumTurns int
+	CostUSD float64
+	SessionID string
+}
+
+func runClaude(command string, prompt string) (*claudeResult, error) {
+	cmd := exec.Command(command, "-p", prompt, "--output-format", "stream-json", "--verbose")
 	cmd.Stderr = os.Stderr
 
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("command failed: %w", err)
+		return nil, fmt.Errorf("command failed: %w", err)
 	}
 
-	return strings.TrimSpace(string(output)), nil
+	return parseStreamJSON(string(output))
+}
+
+// parseStreamJSON extracts the final result and token usage from NDJSON output.
+func parseStreamJSON(output string) (*claudeResult, error) {
+	result := &claudeResult{}
+
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			continue
+		}
+
+		eventType, _ := event["type"].(string)
+
+		switch eventType {
+		case "result":
+			if r, ok := event["result"].(string); ok {
+				result.ResultText = r
+			}
+			if v, ok := event["cost_usd"].(float64); ok {
+				result.CostUSD = v
+			}
+			if v, ok := event["num_turns"].(float64); ok {
+				result.NumTurns = int(v)
+			}
+			if v, ok := event["duration_ms"].(float64); ok {
+				_ = v // duration tracked externally
+			}
+			if v, ok := event["session_id"].(string); ok {
+				result.SessionID = v
+			}
+			// Token usage in result event
+			if usage, ok := event["usage"].(map[string]any); ok {
+				extractUsage(usage, result)
+			}
+
+		case "system":
+			if sid, ok := event["session_id"].(string); ok {
+				result.SessionID = sid
+			}
+
+		case "assistant":
+			// Extract usage from assistant messages
+			if msg, ok := event["message"].(map[string]any); ok {
+				if usage, ok := msg["usage"].(map[string]any); ok {
+					extractUsage(usage, result)
+				}
+			}
+		}
+	}
+
+	return result, nil
+}
+
+func extractUsage(usage map[string]any, result *claudeResult) {
+	if v, ok := usage["input_tokens"].(float64); ok {
+		result.InputTokens = int(v)
+	}
+	if v, ok := usage["output_tokens"].(float64); ok {
+		result.OutputTokens = int(v)
+	}
+	if v, ok := usage["cache_read_input_tokens"].(float64); ok {
+		result.CacheReadTokens = int(v)
+	}
+	if v, ok := usage["cache_creation_input_tokens"].(float64); ok {
+		result.CacheCreationTokens = int(v)
+	}
 }
 
 // --- Result submission ---
 
-func submitResult(sidecarURL string, taskID string, status string, resultText string, duration time.Duration, logger *slog.Logger) {
-	body, _ := json.Marshal(map[string]any{
-		"task_id":       taskID,
-		"status":        status,
-		"result_text":   resultText,
-		"duration_ms":   duration.Milliseconds(),
-		"input_tokens":  0,
-		"output_tokens":  0,
-	})
+type resultPayload struct {
+	TaskID              string  `json:"task_id"`
+	Status              string  `json:"status"`
+	ResultText          string  `json:"result_text"`
+	DurationMs          int64   `json:"duration_ms"`
+	InputTokens         int     `json:"input_tokens"`
+	OutputTokens        int     `json:"output_tokens"`
+	CacheReadTokens     int     `json:"cache_read_tokens"`
+	CacheCreationTokens int     `json:"cache_creation_tokens"`
+	NumTurns            int     `json:"num_turns"`
+	CostUSD             float64 `json:"cost_usd"`
+	SessionID           string  `json:"session_id,omitempty"`
+}
+
+func submitResult(sidecarURL string, taskID string, status string, cr *claudeResult, duration time.Duration, logger *slog.Logger) {
+	payload := resultPayload{
+		TaskID:              taskID,
+		Status:              status,
+		ResultText:          cr.ResultText,
+		DurationMs:          duration.Milliseconds(),
+		InputTokens:         cr.InputTokens,
+		OutputTokens:        cr.OutputTokens,
+		CacheReadTokens:     cr.CacheReadTokens,
+		CacheCreationTokens: cr.CacheCreationTokens,
+		NumTurns:            cr.NumTurns,
+		CostUSD:             cr.CostUSD,
+		SessionID:           cr.SessionID,
+	}
+	body, _ := json.Marshal(payload)
 
 	resp, err := http.Post(sidecarURL+"/task/result", "application/json", bytes.NewReader(body))
 	if err != nil {

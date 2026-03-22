@@ -54,7 +54,7 @@ agents:
 
   - name: database-analyst
     role: "Database Analyst — investigates PostgreSQL performance and data integrity"
-    model: sonnet
+    model: haiku
     prompt: |
       Investigate the PostgreSQL database for the payments service outage.
       Payment success rate dropped from 99.7% to 82% at 14:32 UTC.

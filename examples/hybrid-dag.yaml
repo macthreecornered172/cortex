@@ -17,7 +17,7 @@
 name: "hybrid-dag"
 
 defaults:
-  model: sonnet
+  model: haiku
   max_turns: 20
   permission_mode: bypassPermissions
   timeout_minutes: 10

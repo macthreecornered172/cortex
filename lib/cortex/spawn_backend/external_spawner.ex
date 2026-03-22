@@ -204,17 +204,22 @@ defmodule Cortex.SpawnBackend.ExternalSpawner do
 
   # -- Private -----------------------------------------------------------------
 
+  # Env vars to strip from child processes so nested claude doesn't refuse to start
+  @stripped_env_vars ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"]
+
   @spec spawn_sidecar(String.t(), String.t(), non_neg_integer(), non_neg_integer()) ::
           {:ok, port()} | {:error, term()}
   defp spawn_sidecar(sidecar_bin, team_name, sidecar_port, gateway_port) do
     gateway_token = resolve_gateway_token()
 
-    env = [
-      {~c"CORTEX_GATEWAY_URL", ~c"localhost:#{gateway_port}"},
-      {~c"CORTEX_AGENT_NAME", String.to_charlist(team_name)},
-      {~c"CORTEX_AUTH_TOKEN", String.to_charlist(gateway_token)},
-      {~c"CORTEX_SIDECAR_PORT", ~c"#{sidecar_port}"}
-    ]
+    extra_env = %{
+      "CORTEX_GATEWAY_URL" => "localhost:#{gateway_port}",
+      "CORTEX_AGENT_NAME" => team_name,
+      "CORTEX_AUTH_TOKEN" => gateway_token,
+      "CORTEX_SIDECAR_PORT" => "#{sidecar_port}"
+    }
+
+    env = build_env(extra_env)
 
     try do
       port =
@@ -231,9 +236,11 @@ defmodule Cortex.SpawnBackend.ExternalSpawner do
 
   @spec spawn_worker(String.t(), non_neg_integer()) :: {:ok, port()} | {:error, term()}
   defp spawn_worker(worker_bin, sidecar_port) do
-    env = [
-      {~c"SIDECAR_URL", ~c"http://localhost:#{sidecar_port}"}
-    ]
+    extra_env = %{
+      "SIDECAR_URL" => "http://localhost:#{sidecar_port}"
+    }
+
+    env = build_env(extra_env)
 
     try do
       port =
@@ -246,6 +253,17 @@ defmodule Cortex.SpawnBackend.ExternalSpawner do
     rescue
       e -> {:error, {:worker_spawn_failed, Exception.message(e)}}
     end
+  end
+
+  # Builds a full env list: inherits parent env, strips CLAUDECODE vars,
+  # and merges in extra vars.
+  @spec build_env(map()) :: [{charlist(), charlist() | false}]
+  defp build_env(extra) do
+    System.get_env()
+    |> Map.drop(@stripped_env_vars)
+    |> Map.merge(extra)
+    |> Enum.map(fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
+    |> Kernel.++(Enum.map(@stripped_env_vars, &{String.to_charlist(&1), false}))
   end
 
   @spec wait_for_registration(String.t(), GenServer.server(), non_neg_integer()) ::

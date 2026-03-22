@@ -11,12 +11,17 @@ type statusRequest struct {
 
 // taskResultRequest is the JSON body for POST /task/result.
 type taskResultRequest struct {
-	TaskID       string `json:"task_id"`
-	Status       string `json:"status"`
-	ResultText   string `json:"result_text"`
-	DurationMs   int64  `json:"duration_ms"`
-	InputTokens  int32  `json:"input_tokens"`
-	OutputTokens int32  `json:"output_tokens"`
+	TaskID              string  `json:"task_id"`
+	Status              string  `json:"status"`
+	ResultText          string  `json:"result_text"`
+	DurationMs          int64   `json:"duration_ms"`
+	InputTokens         int32   `json:"input_tokens"`
+	OutputTokens        int32   `json:"output_tokens"`
+	CacheReadTokens     int32   `json:"cache_read_tokens"`
+	CacheCreationTokens int32   `json:"cache_creation_tokens"`
+	NumTurns            int32   `json:"num_turns"`
+	CostUSD             float64 `json:"cost_usd"`
+	SessionID           string  `json:"session_id"`
 }
 
 // handleReportStatus reports agent progress to Cortex.

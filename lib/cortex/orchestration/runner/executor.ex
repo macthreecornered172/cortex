@@ -499,7 +499,9 @@ defmodule Cortex.Orchestration.Runner.Executor do
     spawn_handle = maybe_spawn_external(team_name, backend)
 
     try do
-      run_via_external_agent(team_name, prompt, run_opts)
+      result = run_via_external_agent(team_name, prompt, run_opts)
+      emit_external_telemetry(result, run_opts)
+      result
     after
       maybe_stop_external(spawn_handle)
     end
@@ -557,6 +559,36 @@ defmodule Cortex.Orchestration.Runner.Executor do
   @spec maybe_stop_external(ExternalSpawner.handle() | nil) :: :ok
   defp maybe_stop_external(nil), do: :ok
   defp maybe_stop_external(handle), do: ExternalSpawner.stop(handle)
+
+  # Emits token and activity events from an external provider result so the
+  # UI shows the same telemetry as the CLI path. These are end-of-run events
+  # (not streamed during execution), but they populate the dashboard.
+  defp emit_external_telemetry({:ok, %TeamResult{} = result}, run_opts) do
+    team_name = Keyword.get(run_opts, :team_name)
+    on_token_update = Keyword.get(run_opts, :on_token_update)
+    on_activity = Keyword.get(run_opts, :on_activity)
+
+    if on_token_update && team_name do
+      on_token_update.(team_name, %{
+        input_tokens: result.input_tokens || 0,
+        output_tokens: result.output_tokens || 0,
+        cache_read_tokens: result.cache_read_tokens || 0,
+        cache_creation_tokens: result.cache_creation_tokens || 0
+      })
+    end
+
+    if on_activity && team_name do
+      on_activity.(team_name, %{
+        type: :external_completed,
+        tools: [],
+        details: ["External agent completed via sidecar"]
+      })
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp emit_external_telemetry(_result, _run_opts), do: :ok
 
   # -- External agent helpers --------------------------------------------------
 

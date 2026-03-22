@@ -62,7 +62,7 @@ agents:
 
   - name: monetization
     topic: "revenue"
-    model: sonnet
+    model: haiku
     prompt: |
       Design the monetization strategy for FitPulse. The app targets
       casual gym-goers aged 25-40 — price-sensitive but willing to pay

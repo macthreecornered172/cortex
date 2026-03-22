@@ -67,7 +67,7 @@ teams:
   - name: data-modeling
     lead:
       role: "Data Architect"
-      model: sonnet
+      model: haiku
     members:
       - role: "Database Engineer"
         focus: "PostgreSQL schema design and indexing"
@@ -104,7 +104,7 @@ teams:
   - name: architecture
     lead:
       role: "Software Architect"
-      model: sonnet
+      model: haiku
     members:
       - role: "Backend Engineer"
         focus: "Go project structure and dependency injection"
@@ -162,7 +162,7 @@ teams:
   - name: implementation
     lead:
       role: "Tech Lead"
-      model: sonnet
+      model: haiku
     members:
       - role: "Senior Backend Engineer"
         focus: "core CRUD and business logic"
