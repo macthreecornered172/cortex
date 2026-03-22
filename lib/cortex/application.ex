@@ -33,7 +33,15 @@ defmodule Cortex.Application do
         # Workspace: serializes read-modify-write operations on workspace JSON files
         Cortex.Orchestration.WorkspaceLock,
         # Gateway: supervisor for external agent registry and health monitor
-        Cortex.Gateway.Supervisor
+        Cortex.Gateway.Supervisor,
+        # ExternalAgent: DynamicSupervisor for sidecar-connected agent GenServers
+        %{
+          id: Cortex.Agent.ExternalSupervisor,
+          start:
+            {Cortex.Agent.ExternalSupervisor, :start_link,
+             [[name: Cortex.Agent.ExternalSupervisor]]},
+          type: :supervisor
+        }
       ] ++ persistence_children() ++ web_children()
 
     opts = [strategy: :one_for_one, name: Cortex.Supervisor]

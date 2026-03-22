@@ -61,7 +61,8 @@ defmodule Cortex.InternalAgent.Summary do
       command: Keyword.get(opts, :command, "claude"),
       cwd: System.tmp_dir!(),
       log_path: log_path,
-      system_prompt: "You are a concise run analysis agent. Analyze the data and produce a summary.",
+      system_prompt:
+        "You are a concise run analysis agent. Analyze the data and produce a summary.",
       on_activity: Keyword.get(opts, :on_activity),
       on_token_update: Keyword.get(opts, :on_token_update)
     }

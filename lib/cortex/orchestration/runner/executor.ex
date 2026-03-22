@@ -13,6 +13,8 @@ defmodule Cortex.Orchestration.Runner.Executor do
   produce empty tiers.
   """
 
+  alias Cortex.Agent.ExternalAgent
+  alias Cortex.Agent.ExternalSupervisor
   alias Cortex.Messaging.InboxBridge
   alias Cortex.Messaging.OutboxWatcher
   alias Cortex.Orchestration.Config
@@ -24,6 +26,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
   alias Cortex.Orchestration.Summary
   alias Cortex.Orchestration.TeamResult
   alias Cortex.Orchestration.Workspace
+  alias Cortex.Provider.External, as: ProviderExternal
   alias Cortex.Provider.Resolver, as: ProviderResolver
   alias Cortex.Store.Schemas.TeamRun, as: TeamRunSchema
   alias Cortex.Telemetry, as: Tel
@@ -453,11 +456,6 @@ defmodule Cortex.Orchestration.Runner.Executor do
 
     provider_mod = ProviderResolver.resolve!(team, config.defaults)
 
-    provider_config = %{
-      command: command,
-      cwd: workspace.path
-    }
-
     run_opts = [
       team_name: team_name,
       model: model,
@@ -470,14 +468,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
       on_port_opened: on_port_opened
     ]
 
-    result =
-      with {:ok, handle} <- provider_mod.start(provider_config) do
-        try do
-          provider_mod.run(handle, prompt, run_opts)
-        after
-          provider_mod.stop(handle)
-        end
-      end
+    result = dispatch_to_provider(provider_mod, team_name, prompt, run_opts, command, workspace)
 
     case result do
       {:ok, %TeamResult{status: :success} = team_result} ->
@@ -488,6 +479,49 @@ defmodule Cortex.Orchestration.Runner.Executor do
 
       {:error, reason} ->
         {team_name, {:error, reason}, %{type: :error, reason: reason}}
+    end
+  end
+
+  # -- Provider dispatch -------------------------------------------------------
+
+  defp dispatch_to_provider(ProviderExternal, team_name, prompt, run_opts, _command, _workspace) do
+    run_via_external_agent(team_name, prompt, run_opts)
+  end
+
+  defp dispatch_to_provider(provider_mod, _team_name, prompt, run_opts, command, workspace) do
+    provider_config = %{
+      command: command,
+      cwd: workspace.path
+    }
+
+    with {:ok, handle} <- provider_mod.start(provider_config) do
+      try do
+        provider_mod.run(handle, prompt, run_opts)
+      after
+        provider_mod.stop(handle)
+      end
+    end
+  end
+
+  # -- External agent helpers --------------------------------------------------
+
+  defp run_via_external_agent(team_name, prompt, run_opts) do
+    case ensure_external_agent(team_name) do
+      {:ok, agent_pid} ->
+        ExternalAgent.run(agent_pid, prompt, run_opts)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp ensure_external_agent(team_name) do
+    case ExternalSupervisor.find_agent(team_name) do
+      {:ok, pid} ->
+        {:ok, pid}
+
+      :not_found ->
+        ExternalSupervisor.start_agent(name: team_name)
     end
   end
 

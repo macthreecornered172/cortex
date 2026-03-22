@@ -363,9 +363,24 @@ defmodule CortexWeb.MeshComponents do
   attr(:theme, :string, default: "cyan")
 
   @flow_themes %{
-    "cyan" => %{border: "border-cortex-900/50", heading: "text-cortex-400", bar: "bg-cortex-600", stat: "text-cortex-400"},
-    "emerald" => %{border: "border-emerald-900/50", heading: "text-emerald-400", bar: "bg-emerald-600", stat: "text-emerald-400"},
-    "purple" => %{border: "border-purple-900/50", heading: "text-purple-400", bar: "bg-purple-600", stat: "text-purple-400"}
+    "cyan" => %{
+      border: "border-cortex-900/50",
+      heading: "text-cortex-400",
+      bar: "bg-cortex-600",
+      stat: "text-cortex-400"
+    },
+    "emerald" => %{
+      border: "border-emerald-900/50",
+      heading: "text-emerald-400",
+      bar: "bg-emerald-600",
+      stat: "text-emerald-400"
+    },
+    "purple" => %{
+      border: "border-purple-900/50",
+      heading: "text-purple-400",
+      bar: "bg-purple-600",
+      stat: "text-purple-400"
+    }
   }
 
   def message_flow_summary(assigns) do
@@ -373,10 +388,12 @@ defmodule CortexWeb.MeshComponents do
       ~H""
     else
       ft = Map.get(@flow_themes, assigns.theme, @flow_themes["cyan"])
-      max_flow = case assigns.message_flows.flows do
-        [top | _] -> max(top.count, 1)
-        [] -> 1
-      end
+
+      max_flow =
+        case assigns.message_flows.flows do
+          [top | _] -> max(top.count, 1)
+          [] -> 1
+        end
 
       assigns =
         assigns
@@ -444,9 +461,39 @@ defmodule CortexWeb.MeshComponents do
   attr(:theme, :string, default: "cyan")
 
   @themes %{
-    "cyan" => %{edge: "#22d3ee", edge_light: "#67e8f9", glow: "#22d3ee", badge_bg: "#0e7490", badge_border: "#22d3ee", arrow: "#22d3ee", selected_bg: "#0c4a6e", selected_border: "#22d3ee", text: "text-cortex-400"},
-    "emerald" => %{edge: "#34d399", edge_light: "#6ee7b7", glow: "#34d399", badge_bg: "#065f46", badge_border: "#34d399", arrow: "#34d399", selected_bg: "#064e3b", selected_border: "#34d399", text: "text-emerald-400"},
-    "purple" => %{edge: "#c084fc", edge_light: "#d8b4fe", glow: "#c084fc", badge_bg: "#6b21a8", badge_border: "#c084fc", arrow: "#c084fc", selected_bg: "#581c87", selected_border: "#c084fc", text: "text-purple-400"}
+    "cyan" => %{
+      edge: "#22d3ee",
+      edge_light: "#67e8f9",
+      glow: "#22d3ee",
+      badge_bg: "#0e7490",
+      badge_border: "#22d3ee",
+      arrow: "#22d3ee",
+      selected_bg: "#0c4a6e",
+      selected_border: "#22d3ee",
+      text: "text-cortex-400"
+    },
+    "emerald" => %{
+      edge: "#34d399",
+      edge_light: "#6ee7b7",
+      glow: "#34d399",
+      badge_bg: "#065f46",
+      badge_border: "#34d399",
+      arrow: "#34d399",
+      selected_bg: "#064e3b",
+      selected_border: "#34d399",
+      text: "text-emerald-400"
+    },
+    "purple" => %{
+      edge: "#c084fc",
+      edge_light: "#d8b4fe",
+      glow: "#c084fc",
+      badge_bg: "#6b21a8",
+      badge_border: "#c084fc",
+      arrow: "#c084fc",
+      selected_bg: "#581c87",
+      selected_border: "#c084fc",
+      text: "text-purple-400"
+    }
   }
 
   def communication_graph(assigns) do
@@ -503,38 +550,79 @@ defmodule CortexWeb.MeshComponents do
 
               [
                 %{
-                  x1: ax + ox, y1: ay + oy, x2: bx + ox, y2: by + oy,
-                  count: ab, max: max_count, direction: :forward,
-                  id: "#{a}-#{b}", from: a, to: b
+                  x1: ax + ox,
+                  y1: ay + oy,
+                  x2: bx + ox,
+                  y2: by + oy,
+                  count: ab,
+                  max: max_count,
+                  direction: :forward,
+                  id: "#{a}-#{b}",
+                  from: a,
+                  to: b
                 },
                 %{
-                  x1: bx - ox, y1: by - oy, x2: ax - ox, y2: ay - oy,
-                  count: ba, max: max_count, direction: :forward,
-                  id: "#{b}-#{a}", from: b, to: a
+                  x1: bx - ox,
+                  y1: by - oy,
+                  x2: ax - ox,
+                  y2: ay - oy,
+                  count: ba,
+                  max: max_count,
+                  direction: :forward,
+                  id: "#{b}-#{a}",
+                  from: b,
+                  to: a
                 }
               ]
 
             ab > 0 ->
-              [%{
-                x1: ax, y1: ay, x2: bx, y2: by,
-                count: ab, max: max_count, direction: :forward,
-                id: "#{a}-#{b}", from: a, to: b
-              }]
+              [
+                %{
+                  x1: ax,
+                  y1: ay,
+                  x2: bx,
+                  y2: by,
+                  count: ab,
+                  max: max_count,
+                  direction: :forward,
+                  id: "#{a}-#{b}",
+                  from: a,
+                  to: b
+                }
+              ]
 
             ba > 0 ->
-              [%{
-                x1: bx, y1: by, x2: ax, y2: ay,
-                count: ba, max: max_count, direction: :forward,
-                id: "#{b}-#{a}", from: b, to: a
-              }]
+              [
+                %{
+                  x1: bx,
+                  y1: by,
+                  x2: ax,
+                  y2: ay,
+                  count: ba,
+                  max: max_count,
+                  direction: :forward,
+                  id: "#{b}-#{a}",
+                  from: b,
+                  to: a
+                }
+              ]
 
             true ->
               # No messages — background edge
-              [%{
-                x1: ax, y1: ay, x2: bx, y2: by,
-                count: 0, max: max_count, direction: :none,
-                id: "bg-#{a}-#{b}", from: a, to: b
-              }]
+              [
+                %{
+                  x1: ax,
+                  y1: ay,
+                  x2: bx,
+                  y2: by,
+                  count: 0,
+                  max: max_count,
+                  direction: :none,
+                  id: "bg-#{a}-#{b}",
+                  from: a,
+                  to: b
+                }
+              ]
           end
         end)
 
@@ -543,12 +631,19 @@ defmodule CortexWeb.MeshComponents do
       nodes =
         Enum.map(assigns.agents, fn agent ->
           {x, y} = Map.get(positions, agent.name, {0, 0})
-          agent_stats = Map.get(assigns.message_flows.by_agent, agent.name, %{sent: 0, received: 0})
+
+          agent_stats =
+            Map.get(assigns.message_flows.by_agent, agent.name, %{sent: 0, received: 0})
+
           total = agent_stats.sent + agent_stats.received
 
           %{
-            name: agent.name, x: x, y: y, status: agent.status,
-            total: total, selected: agent.name == selected,
+            name: agent.name,
+            x: x,
+            y: y,
+            status: agent.status,
+            total: total,
+            selected: agent.name == selected,
             role: Map.get(agent, :role)
           }
         end)
@@ -566,7 +661,8 @@ defmodule CortexWeb.MeshComponents do
         if selected, do: Enum.find(assigns.agents, &(&1.name == selected))
 
       selected_stats =
-        if selected, do: Map.get(assigns.message_flows.by_agent, selected, %{sent: 0, received: 0})
+        if selected,
+          do: Map.get(assigns.message_flows.by_agent, selected, %{sent: 0, received: 0})
 
       has_traffic = assigns.message_flows.total > 0
       run_active = assigns.run_status in ["running", "pending"]
@@ -789,6 +885,7 @@ defmodule CortexWeb.MeshComponents do
 
   defp node_font_size(name) do
     len = String.length(name)
+
     cond do
       len <= 6 -> "11"
       len <= 10 -> "9"
@@ -798,6 +895,7 @@ defmodule CortexWeb.MeshComponents do
 
   defp abbrev(name) do
     len = String.length(name)
+
     cond do
       len <= 10 -> name
       # Try to keep first word + abbreviate rest: "app-logs-analyst" -> "app-logs-a.."
