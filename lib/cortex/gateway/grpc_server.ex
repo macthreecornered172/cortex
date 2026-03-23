@@ -248,6 +248,8 @@ defmodule Cortex.Gateway.GrpcServer do
             detail: update.detail
           })
 
+          maybe_broadcast_token_progress(state.agent_id, update.detail)
+
         {:error, reason} ->
           push_error(
             state.stream,
@@ -259,6 +261,35 @@ defmodule Cortex.Gateway.GrpcServer do
       state
     end)
   end
+
+  # If the status update detail contains JSON with token fields, broadcast
+  # an :external_agent_progress event so the executor can forward it to the UI.
+  defp maybe_broadcast_token_progress(agent_id, detail) when is_binary(detail) do
+    case Jason.decode(detail) do
+      {:ok, %{"input_tokens" => _, "output_tokens" => _} = tokens} ->
+        # Look up agent name from registry
+        case Registry.get(Registry, agent_id) do
+          {:ok, agent} ->
+            Events.broadcast(:external_agent_progress, %{
+              agent_name: agent.name,
+              input_tokens: Map.get(tokens, "input_tokens", 0),
+              output_tokens: Map.get(tokens, "output_tokens", 0),
+              cache_read_tokens: Map.get(tokens, "cache_read_tokens", 0),
+              cache_creation_tokens: Map.get(tokens, "cache_creation_tokens", 0)
+            })
+
+          _ ->
+            :ok
+        end
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp maybe_broadcast_token_progress(_agent_id, _detail), do: :ok
 
   # -- Peer response --
 

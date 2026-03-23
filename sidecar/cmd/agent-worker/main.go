@@ -16,6 +16,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -79,7 +80,7 @@ func main() {
 
 		// Run claude -p with the task prompt
 		start := time.Now()
-		cr, err := runClaude(claudeCmd, task.Prompt)
+		cr, err := runClaude(claudeCmd, task.Prompt, sidecarURL, logger)
 		duration := time.Since(start)
 
 		if err != nil {
@@ -145,24 +146,28 @@ type claudeResult struct {
 	SessionID string
 }
 
-func runClaude(command string, prompt string) (*claudeResult, error) {
+func runClaude(command string, prompt string, sidecarURL string, logger *slog.Logger) (*claudeResult, error) {
 	cmd := exec.Command(command, "-p", prompt, "--output-format", "stream-json", "--verbose")
 	cmd.Stderr = os.Stderr
 
-	output, err := cmd.Output()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("command failed: %w", err)
+		return nil, fmt.Errorf("stdout pipe failed: %w", err)
 	}
 
-	return parseStreamJSON(string(output))
-}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("command start failed: %w", err)
+	}
 
-// parseStreamJSON extracts the final result and token usage from NDJSON output.
-func parseStreamJSON(output string) (*claudeResult, error) {
 	result := &claudeResult{}
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
 
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
+	lastReport := time.Now()
+	reportInterval := 5 * time.Second
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
@@ -172,47 +177,78 @@ func parseStreamJSON(output string) (*claudeResult, error) {
 			continue
 		}
 
-		eventType, _ := event["type"].(string)
+		processEvent(event, result)
 
-		switch eventType {
-		case "result":
-			if r, ok := event["result"].(string); ok {
-				result.ResultText = r
-			}
-			if v, ok := event["cost_usd"].(float64); ok {
-				result.CostUSD = v
-			}
-			if v, ok := event["num_turns"].(float64); ok {
-				result.NumTurns = int(v)
-			}
-			if v, ok := event["duration_ms"].(float64); ok {
-				_ = v // duration tracked externally
-			}
-			if v, ok := event["session_id"].(string); ok {
-				result.SessionID = v
-			}
-			// Token usage in result event
-			if usage, ok := event["usage"].(map[string]any); ok {
-				extractUsage(usage, result)
-			}
-
-		case "system":
-			if sid, ok := event["session_id"].(string); ok {
-				result.SessionID = sid
-			}
-
-		case "assistant":
-			// Extract usage from assistant messages
-			if msg, ok := event["message"].(map[string]any); ok {
-				if usage, ok := msg["usage"].(map[string]any); ok {
-					extractUsage(usage, result)
-				}
-			}
+		// Report progress every ~5s
+		if time.Since(lastReport) >= reportInterval && (result.InputTokens > 0 || result.OutputTokens > 0) {
+			reportProgress(sidecarURL, result, logger)
+			lastReport = time.Now()
 		}
+	}
+
+	if err := cmd.Wait(); err != nil {
+		return nil, fmt.Errorf("command failed: %w", err)
 	}
 
 	return result, nil
 }
+
+func processEvent(event map[string]any, result *claudeResult) {
+	eventType, _ := event["type"].(string)
+
+	switch eventType {
+	case "result":
+		if r, ok := event["result"].(string); ok {
+			result.ResultText = r
+		}
+		if v, ok := event["cost_usd"].(float64); ok {
+			result.CostUSD = v
+		}
+		if v, ok := event["num_turns"].(float64); ok {
+			result.NumTurns = int(v)
+		}
+		if v, ok := event["session_id"].(string); ok {
+			result.SessionID = v
+		}
+		if usage, ok := event["usage"].(map[string]any); ok {
+			extractUsage(usage, result)
+		}
+
+	case "system":
+		if sid, ok := event["session_id"].(string); ok {
+			result.SessionID = sid
+		}
+
+	case "assistant":
+		if msg, ok := event["message"].(map[string]any); ok {
+			if usage, ok := msg["usage"].(map[string]any); ok {
+				extractUsage(usage, result)
+			}
+		}
+	}
+}
+
+func reportProgress(sidecarURL string, result *claudeResult, logger *slog.Logger) {
+	detail, _ := json.Marshal(map[string]any{
+		"input_tokens":          result.InputTokens,
+		"output_tokens":         result.OutputTokens,
+		"cache_read_tokens":     result.CacheReadTokens,
+		"cache_creation_tokens": result.CacheCreationTokens,
+	})
+
+	body, _ := json.Marshal(map[string]any{
+		"status": "working",
+		"detail": string(detail),
+	})
+
+	resp, err := http.Post(sidecarURL+"/status", "application/json", bytes.NewReader(body))
+	if err != nil {
+		logger.Debug("progress report failed", "error", err)
+		return
+	}
+	resp.Body.Close()
+}
+
 
 func extractUsage(usage map[string]any, result *claudeResult) {
 	if v, ok := usage["input_tokens"].(float64); ok {

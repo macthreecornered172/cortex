@@ -3,25 +3,10 @@
 # Three external agents work through a tiered DAG: two researchers in parallel
 # (tier 0), then a synthesizer that depends on both (tier 1).
 #
-# Each team name must match a registered sidecar's CORTEX_AGENT_NAME.
+# Cortex auto-spawns a sidecar + worker pair for each team on separate ports.
+# Just paste this in the UI and click launch, or run from CLI:
 #
-# Prerequisites:
-#   1. Start Cortex:   CORTEX_GATEWAY_TOKEN=my-token mix phx.server
-#   2. Start 3 sidecars (each in its own terminal):
-#
-#      CORTEX_GATEWAY_URL=localhost:4001 CORTEX_AGENT_NAME=researcher-a \
-#        CORTEX_AUTH_TOKEN=my-token CORTEX_SIDECAR_PORT=9091 \
-#        ./sidecar/bin/cortex-sidecar
-#
-#      CORTEX_GATEWAY_URL=localhost:4001 CORTEX_AGENT_NAME=researcher-b \
-#        CORTEX_AUTH_TOKEN=my-token CORTEX_SIDECAR_PORT=9092 \
-#        ./sidecar/bin/cortex-sidecar
-#
-#      CORTEX_GATEWAY_URL=localhost:4001 CORTEX_AGENT_NAME=synthesizer \
-#        CORTEX_AUTH_TOKEN=my-token CORTEX_SIDECAR_PORT=9093 \
-#        ./sidecar/bin/cortex-sidecar
-#
-#   3. Run:            mix cortex.run examples/external-dag.yaml
+#   mix cortex.run examples/external-dag.yaml
 
 name: "external-dag"
 
