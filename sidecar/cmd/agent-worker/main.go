@@ -16,7 +16,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -80,7 +79,7 @@ func main() {
 
 		// Run claude -p with the task prompt
 		start := time.Now()
-		cr, err := runClaude(claudeCmd, task.Prompt, sidecarURL, logger)
+		cr, err := runClaude(claudeCmd, task.Prompt)
 		duration := time.Since(start)
 
 		if err != nil {
@@ -146,48 +145,28 @@ type claudeResult struct {
 	SessionID string
 }
 
-func runClaude(command string, prompt string, sidecarURL string, logger *slog.Logger) (*claudeResult, error) {
+func runClaude(command string, prompt string) (*claudeResult, error) {
 	cmd := exec.Command(command, "-p", prompt, "--output-format", "stream-json", "--verbose")
 	cmd.Stderr = os.Stderr
 
-	stdout, err := cmd.StdoutPipe()
+	// claude -p buffers all NDJSON output until exit, so we collect
+	// it all at once and parse token counts from the final output.
+	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("stdout pipe failed: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("command start failed: %w", err)
+		return nil, fmt.Errorf("command failed: %w", err)
 	}
 
 	result := &claudeResult{}
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
-
-	lastReport := time.Now()
-	reportInterval := 5 * time.Second
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-
 		var event map[string]any
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			continue
 		}
-
 		processEvent(event, result)
-
-		// Report progress every ~5s
-		if time.Since(lastReport) >= reportInterval && (result.InputTokens > 0 || result.OutputTokens > 0) {
-			reportProgress(sidecarURL, result, logger)
-			lastReport = time.Now()
-		}
-	}
-
-	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("command failed: %w", err)
 	}
 
 	return result, nil
@@ -228,26 +207,6 @@ func processEvent(event map[string]any, result *claudeResult) {
 	}
 }
 
-func reportProgress(sidecarURL string, result *claudeResult, logger *slog.Logger) {
-	detail, _ := json.Marshal(map[string]any{
-		"input_tokens":          result.InputTokens,
-		"output_tokens":         result.OutputTokens,
-		"cache_read_tokens":     result.CacheReadTokens,
-		"cache_creation_tokens": result.CacheCreationTokens,
-	})
-
-	body, _ := json.Marshal(map[string]any{
-		"status": "working",
-		"detail": string(detail),
-	})
-
-	resp, err := http.Post(sidecarURL+"/status", "application/json", bytes.NewReader(body))
-	if err != nil {
-		logger.Debug("progress report failed", "error", err)
-		return
-	}
-	resp.Body.Close()
-}
 
 
 func extractUsage(usage map[string]any, result *claudeResult) {

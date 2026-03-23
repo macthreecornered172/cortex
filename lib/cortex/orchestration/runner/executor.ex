@@ -497,14 +497,12 @@ defmodule Cortex.Orchestration.Runner.Executor do
          backend
        ) do
     spawn_handle = maybe_spawn_external(team_name, backend)
-    progress_pid = start_progress_listener(team_name, run_opts)
 
     try do
       result = run_via_external_agent(team_name, prompt, run_opts)
       emit_external_telemetry(result, run_opts)
       result
     after
-      stop_progress_listener(progress_pid)
       maybe_stop_external(spawn_handle)
     end
   end
@@ -561,52 +559,6 @@ defmodule Cortex.Orchestration.Runner.Executor do
   @spec maybe_stop_external(ExternalSpawner.handle() | nil) :: :ok
   defp maybe_stop_external(nil), do: :ok
   defp maybe_stop_external(handle), do: ExternalSpawner.stop(handle)
-
-  # Spawns a process that subscribes to :external_agent_progress events and
-  # forwards matching ones to the on_token_update callback. This gives the UI
-  # periodic token updates during external agent execution (~every 5s).
-  @spec start_progress_listener(String.t(), keyword()) :: pid() | nil
-  defp start_progress_listener(team_name, run_opts) do
-    on_token_update = Keyword.get(run_opts, :on_token_update)
-
-    if on_token_update do
-      spawn(fn ->
-        Cortex.Events.subscribe()
-        progress_listen_loop(team_name, on_token_update)
-      end)
-    end
-  rescue
-    _ -> nil
-  end
-
-  defp progress_listen_loop(team_name, on_token_update) do
-    receive do
-      %{type: :external_agent_progress, payload: %{agent_name: ^team_name} = payload} ->
-        on_token_update.(team_name, %{
-          input_tokens: payload.input_tokens || 0,
-          output_tokens: payload.output_tokens || 0,
-          cache_read_tokens: payload.cache_read_tokens || 0,
-          cache_creation_tokens: payload.cache_creation_tokens || 0
-        })
-
-        progress_listen_loop(team_name, on_token_update)
-
-      :stop_progress_listener ->
-        :ok
-
-      _other ->
-        progress_listen_loop(team_name, on_token_update)
-    end
-  end
-
-  defp stop_progress_listener(nil), do: :ok
-
-  defp stop_progress_listener(pid) when is_pid(pid) do
-    send(pid, :stop_progress_listener)
-    :ok
-  rescue
-    _ -> :ok
-  end
 
   # Emits token and activity events from an external provider result so the
   # UI shows the same telemetry as the CLI path. These are end-of-run events
