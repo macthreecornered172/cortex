@@ -128,6 +128,9 @@ test-all: ## Run ALL tests including integration (requires real claude CLI)
 e2e: sidecar-build worker-build ## Run full e2e: starts Cortex + sidecar, runs test, cleans up
 	cd e2e && go test -v -timeout 300s
 
+e2e-docker: ## Run Docker spawn backend e2e tests (requires Docker daemon)
+	cd e2e && go test -v -run TestDocker -timeout 120s
+
 e2e-shell: ## Run shell-based e2e sidecar ↔ gRPC ↔ gateway test
 	./test/e2e/sidecar_e2e_test.sh
 

@@ -22,7 +22,7 @@ defmodule Cortex.SpawnBackend.Docker.Client do
 
   @default_socket "/var/run/docker.sock"
   @default_timeout 30_000
-  @api_version "v1.43"
+  @api_version "v1.47"
 
   # -- Public API --
 
