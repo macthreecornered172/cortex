@@ -569,7 +569,17 @@ defmodule Cortex.Orchestration.Runner.Executor do
   defp maybe_spawn_external(team_name, :docker, run_id) do
     Logger.info("Executor: spawning Docker containers for #{team_name} (run=#{run_id})")
 
-    case DockerBackend.spawn(team_name: team_name, run_id: run_id) do
+    # Forward worker-relevant env vars into Docker containers
+    env =
+      ["CLAUDE_COMMAND", "POLL_INTERVAL_MS", "ANTHROPIC_API_KEY"]
+      |> Enum.flat_map(fn key ->
+        case System.get_env(key) do
+          nil -> []
+          val -> ["#{key}=#{val}"]
+        end
+      end)
+
+    case DockerBackend.spawn(team_name: team_name, run_id: run_id, env: env) do
       {:ok, handle} ->
         Logger.info("Executor: Docker containers spawned for #{team_name}")
         handle
