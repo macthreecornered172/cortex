@@ -12,7 +12,7 @@
 #   blocked     — explicitly blocked (see notes)
 
 project: cortex
-updated: 2026-03-22  # phase-2-spawnbackend-local done
+updated: 2026-03-22  # phase-3-docker-k8s plans done
 
 tracks:
   core-phases:
@@ -82,9 +82,10 @@ tracks:
         notes: "ExternalSpawner auto-spawns sidecar + worker, env inheritance, NDJSON token parsing, end-of-run telemetry"
       phase-3-docker-k8s:
         config: docs/agent-worker/phase-3/kickoff.yaml
-        status: next
+        plan_status: done
+        execute_status: not_started
         depends_on: [phase-2-spawnbackend-local]
-        notes: "Postgres, Dockerfiles, Docker Compose, SpawnBackend.Docker + SpawnBackend.K8s"
+        notes: "Dockerfiles, Docker Compose (SQLite retained), SpawnBackend.Docker + SpawnBackend.K8s"
 
   agent-intelligence:
     description: "Agent smarts — peer-aware prompts, Worker V2 with Claude API + tools"

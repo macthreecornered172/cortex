@@ -1,5 +1,5 @@
 name: "agent-worker-phase-3"
-description: "Postgres + Docker + SpawnBackend.Docker/K8s"
+description: "Docker + SpawnBackend.Docker/K8s (SQLite retained)"
 status: pending
 
 dependencies:
@@ -8,10 +8,9 @@ dependencies:
   - docs/compute-spawning/agent-worker-design.md
 
 goals:
-  - Swap SQLite -> Postgres (Ecto adapter change)
   - Dockerfile for Cortex (Elixir release)
   - Dockerfile for sidecar + agent-worker
-  - Docker Compose for local dev (Cortex + Postgres + sidecar + worker)
+  - Docker Compose for local dev (Cortex + SQLite volume + sidecar + worker)
   - SpawnBackend.Docker — Cortex auto-spawns containers
   - SpawnBackend.K8s — Cortex creates K8s pods
 
@@ -21,13 +20,6 @@ outcome: |
   containers per agent. backend: k8s does the same with K8s pods.
 
 tasks:
-  - name: postgres-adapter
-    summary: "Swap SQLite -> Postgres via Ecto adapter change"
-    details: |
-      Change Ecto adapter from ecto_sqlite3 to postgrex.
-      Update config/config.exs, config/dev.exs, config/test.exs.
-      Verify all migrations work. All tests pass against Postgres.
-
   - name: cortex-dockerfile
     summary: "Dockerfile for Cortex (Elixir release)"
     details: |
@@ -43,7 +35,7 @@ tasks:
   - name: docker-compose
     summary: "Docker Compose for local dev"
     details: |
-      Services: cortex (Elixir), postgres, and optionally sidecar + worker
+      Services: cortex (Elixir, SQLite volume), and optionally sidecar + worker
       for testing external configs. Shared network.
 
   - name: spawn-backend-docker
