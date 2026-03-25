@@ -31,7 +31,6 @@ Built on Elixir/OTP because the problem is inherently concurrent — dozens of l
 - [Architecture](#architecture)
 - [Workspace Layout](#workspace-layout)
 - [Development](#development)
-- [Project Structure](#project-structure)
 
 ## Modes
 
@@ -85,6 +84,14 @@ Emergent, decentralized knowledge sharing. Agents explore different angles of a 
 - **Diagnostics** — event timeline, diagnosis banners, resume/restart buttons per team
 - **Team detail** — individual team page with prompt, logs, and recovery actions
 - **Gossip view** — topology visualization with round-by-round knowledge propagation
+
+### Docker Backend
+Cortex can run agent teams inside Docker containers instead of local processes. Set `backend: docker` in your YAML config and Cortex handles the full container lifecycle:
+
+- Per-team container pairs — a **sidecar** (gRPC bridge to the Cortex gateway) and a **worker** (polls sidecar, runs `claude -p`)
+- Per-run bridge networks — containers are isolated per run, cleaned up on completion
+- Combo image — single `cortex-agent-worker:latest` image with both binaries, optional Claude CLI (`INSTALL_CLAUDE=1`)
+- Env var forwarding — `CLAUDE_MODEL`, `CLAUDE_MAX_TURNS`, `CLAUDE_PERMISSION_MODE`, `ANTHROPIC_API_KEY` passed through to worker containers
 
 ### Infrastructure
 - **Pluggable tool system** — sandboxed execution with timeouts and crash isolation
@@ -331,37 +338,28 @@ mix compile --warnings-as-errors      # compile check
 mix credo --strict                    # lint
 ```
 
+### Docker E2E Tests
+
+End-to-end tests for the Docker spawn backend. Cortex runs in a Docker container via compose; the Go test is a pure API client.
+
+```bash
+# Mock agent (no API key needed)
+make e2e-docker-simple                # single-team DAG
+make e2e-docker-multi                 # 3-team multi-tier DAG
+
+# Real Claude (requires ANTHROPIC_API_KEY or ../.key file)
+make e2e-docker-simple-claude         # single-team DAG
+make e2e-docker-multi-claude          # 3-team multi-tier DAG
+```
+
+The Makefile handles `docker compose up/down` around each test run. Cortex gets a Docker socket mount so `docker.ex` can dynamically spawn sidecar + worker containers per team.
+
 ### Benchmarks
 
 ```bash
 mix run bench/agent_bench.exs         # agent lifecycle
 mix run bench/gossip_bench.exs        # gossip protocol
 mix run bench/dag_bench.exs           # DAG engine
-```
-
-## Project Structure
-
-```
-cortex/
-  bench/                          # Benchee benchmark scripts
-  config/                         # Environment configs
-  lib/
-    cortex/
-      agent/                      # Agent GenServer, Config, State, Registry
-      coordinator/                # Coordinator prompt building
-      gossip/                     # KnowledgeStore, Protocol, VectorClock, Topology
-      mesh/                       # Member, MemberList, Detector, Prompt, SessionRunner
-      messaging/                  # InboxBridge, OutboxWatcher, Router, Mailbox, Bus
-      orchestration/              # Runner, DAG, Spawner, Workspace, Config, LogParser
-      perf/                       # Profiler utilities
-      store/                      # Ecto schemas, EventSink
-      tool/                       # Tool behaviour, executor, registry
-    cortex_web/
-      components/                 # Phoenix components (core, DAG)
-      live/                       # LiveView pages
-  priv/
-    repo/migrations/              # Ecto migrations
-  test/                           # mirrors lib/ structure
 ```
 
 ## License
