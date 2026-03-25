@@ -507,7 +507,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
          backend,
          run_id
        ) do
-    spawn_handle = maybe_spawn_external(team_name, backend, run_id)
+    spawn_handle = maybe_spawn_external(team_name, backend, run_id, run_opts)
 
     result =
       try do
@@ -557,9 +557,9 @@ defmodule Cortex.Orchestration.Runner.Executor do
   end
 
   # Spawns sidecar + worker for the given backend. Returns a handle or nil.
-  @spec maybe_spawn_external(String.t(), atom(), String.t()) ::
+  @spec maybe_spawn_external(String.t(), atom(), String.t(), keyword()) ::
           ExternalSpawner.handle() | DockerBackend.Handle.t() | nil
-  defp maybe_spawn_external(team_name, :local, _run_id) do
+  defp maybe_spawn_external(team_name, :local, _run_id, _run_opts) do
     if ExternalSpawner.already_registered?(team_name) do
       Logger.info("Executor: sidecar already registered for #{team_name}, skipping local spawn")
       nil
@@ -580,24 +580,25 @@ defmodule Cortex.Orchestration.Runner.Executor do
     end
   end
 
-  defp maybe_spawn_external(team_name, :docker, run_id) do
+  defp maybe_spawn_external(team_name, :docker, run_id, run_opts) do
     Logger.info("Executor: spawning Docker containers for #{team_name} (run=#{run_id})")
 
-    # Forward worker-relevant env vars into Docker containers
+    # Build env vars from config (run_opts) with System.get_env fallbacks.
+    # Config values take priority so the UI-set model/turns/permissions
+    # reach the worker container without needing OS-level env vars.
     env =
       [
-        "CLAUDE_COMMAND",
-        "CLAUDE_MODEL",
-        "CLAUDE_MAX_TURNS",
-        "CLAUDE_PERMISSION_MODE",
-        "POLL_INTERVAL_MS",
-        "ANTHROPIC_API_KEY"
+        {"CLAUDE_COMMAND", System.get_env("CLAUDE_COMMAND")},
+        {"CLAUDE_MODEL", to_string(run_opts[:model])},
+        {"CLAUDE_MAX_TURNS", to_string(run_opts[:max_turns])},
+        {"CLAUDE_PERMISSION_MODE", to_string(run_opts[:permission_mode])},
+        {"POLL_INTERVAL_MS", System.get_env("POLL_INTERVAL_MS")},
+        {"ANTHROPIC_API_KEY", System.get_env("ANTHROPIC_API_KEY")}
       ]
-      |> Enum.flat_map(fn key ->
-        case System.get_env(key) do
-          nil -> []
-          val -> ["#{key}=#{val}"]
-        end
+      |> Enum.flat_map(fn
+        {_key, nil} -> []
+        {_key, ""} -> []
+        {key, val} -> ["#{key}=#{val}"]
       end)
 
     case DockerBackend.spawn(team_name: team_name, run_id: run_id, env: env) do
@@ -612,7 +613,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
     end
   end
 
-  defp maybe_spawn_external(_team_name, _backend, _run_id), do: nil
+  defp maybe_spawn_external(_team_name, _backend, _run_id, _run_opts), do: nil
 
   @spec maybe_stop_external(ExternalSpawner.handle() | DockerBackend.Handle.t() | nil) :: :ok
   defp maybe_stop_external(nil), do: :ok
