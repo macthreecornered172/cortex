@@ -480,9 +480,9 @@ defmodule Cortex.Orchestration.Runner.ExecutorExternalTest do
         assert {:ok, summary1} = Runner.run(yaml_path, workspace_path: tmp_dir)
         assert summary1.status == :complete
 
-        # The ExternalAgent should persist
-        assert {:ok, agent_pid} = ExternalSupervisor.find_agent(team_name)
-        assert Process.alive?(agent_pid)
+        # The ExternalAgent is stopped after dispatch for clean container teardown,
+        # so it should not persist between runs
+        assert :not_found = ExternalSupervisor.find_agent(team_name)
 
         # Second run (reuse same workspace — the workspace will be re-initialized)
         tmp_dir2 = create_tmp_dir()
@@ -637,16 +637,15 @@ defmodule Cortex.Orchestration.Runner.ExecutorExternalTest do
         {:ok, state} = Workspace.read_state(ws)
         assert state.teams[team_name].status == "done"
 
-        # Verify ExternalAgent is still alive (persists for potential reuse)
-        assert {:ok, pid} = ExternalSupervisor.find_agent(team_name)
-        assert Process.alive?(pid)
+        # ExternalAgent is stopped after dispatch for clean container teardown
+        assert :not_found = ExternalSupervisor.find_agent(team_name)
       after
         cleanup_sidecar(team_name, transport_pid)
         cleanup(tmp_dir)
       end
     end
 
-    test "ExternalAgent persists after run for reuse" do
+    test "ExternalAgent is stopped after run for clean container teardown" do
       team_name = "ext-persist-#{:erlang.unique_integer([:positive])}"
       tmp_dir = create_tmp_dir()
 
@@ -658,14 +657,9 @@ defmodule Cortex.Orchestration.Runner.ExecutorExternalTest do
 
         assert {:ok, _summary} = Runner.run(yaml_path, workspace_path: tmp_dir)
 
-        # The ExternalAgent should still be running after the run completes
-        assert {:ok, pid} = ExternalSupervisor.find_agent(team_name)
-        assert Process.alive?(pid)
-
-        # And it should be in healthy state
-        {:ok, state} = ExternalAgent.get_state(pid)
-        assert state.status == :healthy
-        assert state.name == team_name
+        # ExternalAgent is stopped after dispatch so container teardown
+        # doesn't race with gRPC result delivery
+        assert :not_found = ExternalSupervisor.find_agent(team_name)
       after
         cleanup_sidecar(team_name, transport_pid)
         cleanup(tmp_dir)

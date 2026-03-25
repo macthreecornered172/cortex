@@ -6,21 +6,19 @@
 |-------|-------------|-------------|----------------|
 | **Unit** | No | No | Logic correctness with mocks |
 | **Integration** | No | Yes (Docker, gRPC, processes) | Infrastructure works, plumbing connects |
-| **E2E / Smoke** | **Yes** | Yes | A real agent completes real work end-to-end |
-
-"E2E" means a real Claude agent receives a task, does work, and returns a result
-through the full pipeline. If there's no real agent at the end, it's integration.
+| **E2E** | Mock or real | Yes | Full pipeline end-to-end |
 
 ## Make Targets
 
 ### Unit tests
 
 ```bash
-mix test                    # All Elixir unit tests (mocked, no external deps)
+make test                   # All Elixir unit tests (mocked, no external deps)
 make sidecar-test           # Go sidecar unit tests
+make test-elixir-all        # All Elixir tests including integration + e2e tags
 ```
 
-### Integration tests
+### Integration tests (no Claude, no API key)
 
 ```bash
 make docker-integration     # Docker API lifecycle: container CRUD, networks, labels, logs
@@ -28,39 +26,50 @@ make e2e-shell              # Sidecar <-> gRPC <-> Gateway protocol
 make e2e-elixir             # Elixir-side ExternalAgent pipeline (mock sidecar)
 ```
 
-### E2E / Smoke tests
+### E2E tests
 
 ```bash
-make e2e                    # Local processes: Cortex + sidecar + worker + real Claude
-make e2e-docker-dag         # Docker containers: Cortex spawns containers, real Claude
+make e2e-local              # Local processes: Cortex + sidecar + worker (mock agent)
+make e2e-docker             # Docker containers: mock agent (no API key needed)
+make e2e-docker-claude      # Docker containers: real Claude CLI (needs API key + claude image)
 ```
 
-Both e2e targets use `USE_CLAUDE=1` to enable real Claude. Without it, a mock
-script stands in (useful for CI where no API key is available, but this makes
-the test an integration test, not a true e2e).
+### CI / lint
+
+```bash
+make check                  # Format + compile warnings + credo + unit tests
+make sidecar-check          # Go lint + test + build
+```
+
+### Docker image builds
+
+```bash
+make docker-combo           # Build cortex-agent-worker:latest (mock mode, no Claude CLI)
+make docker-combo-claude    # Build cortex-agent-worker:latest with Claude CLI installed
+```
 
 ## What each e2e target exercises
 
-### `make e2e` (local processes)
+### `make e2e-local` (local processes)
 
 ```
 Cortex (mix phx.server)
   -> Executor sees provider: external, backend: local
   -> ExternalSpawner forks sidecar + worker as OS processes
   -> Sidecar registers with Gateway via gRPC
-  -> Worker polls sidecar, gets task, runs claude -p
+  -> Worker polls sidecar, gets task, runs mock or claude -p
   -> Result flows: worker -> sidecar -> Gateway -> Cortex
   -> Run completes
 ```
 
-### `make e2e-docker-dag` (Docker containers)
+### `make e2e-docker` / `make e2e-docker-claude` (Docker containers)
 
 ```
 Cortex (mix phx.server)
   -> Executor sees provider: external, backend: docker
   -> SpawnBackend.Docker creates network + sidecar + worker containers
   -> Sidecar registers with Gateway via gRPC
-  -> Worker polls sidecar, gets task, runs claude -p (inside container)
+  -> Worker polls sidecar, gets task, runs mock or claude -p (inside container)
   -> Result flows: worker -> sidecar -> Gateway -> Cortex
   -> Executor calls stop -> containers + network removed
   -> Run completes
@@ -69,8 +78,5 @@ Cortex (mix phx.server)
 ## Known gaps
 
 - **K8s e2e**: No e2e test yet for `backend: k8s`. Needs `kind` or `minikube`.
-- **Multi-team Docker e2e**: The `TestDockerDAGMultiTeam` test exists but hasn't
-  been validated with real Claude in containers yet.
-- **Result delivery race**: When Docker containers respond very fast (< 1s),
-  there's a race between the executor cleaning up the pending task and the
-  gRPC result arriving. Tracked as a known bug.
+- **Multi-team Docker e2e with real Claude**: `TestDockerDAGMultiTeam` passes with mock
+  agent but hasn't been validated with real Claude in containers yet.

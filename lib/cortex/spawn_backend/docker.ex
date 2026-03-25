@@ -230,15 +230,24 @@ defmodule Cortex.SpawnBackend.Docker do
 
     container_name = container_name(run_id, team_name, "sidecar")
 
+    # Forward CLAUDE_COMMAND so the combo entrypoint's embedded worker
+    # uses mock mode when set (each container runs both sidecar + worker).
+    claude_cmd_env =
+      case System.get_env("CLAUDE_COMMAND") do
+        nil -> []
+        val -> ["CLAUDE_COMMAND=#{val}"]
+      end
+
     %{
       "name" => container_name,
       "Image" => image,
-      "Env" => [
-        "CORTEX_GATEWAY_URL=#{gateway_url}",
-        "CORTEX_AGENT_NAME=#{team_name}",
-        "CORTEX_AUTH_TOKEN=#{gateway_token}",
-        "CORTEX_SIDECAR_PORT=9091"
-      ],
+      "Env" =>
+        [
+          "CORTEX_GATEWAY_URL=#{gateway_url}",
+          "CORTEX_AGENT_NAME=#{team_name}",
+          "CORTEX_AUTH_TOKEN=#{gateway_token}",
+          "CORTEX_SIDECAR_PORT=9091"
+        ] ++ claude_cmd_env,
       "Cmd" => ["/cortex-sidecar"],
       "Labels" => container_labels(run_id, team_name, "sidecar"),
       "HostConfig" => %{

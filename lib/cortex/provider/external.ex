@@ -160,17 +160,25 @@ defmodule Cortex.Provider.External do
         agent.id
       )
 
-    task_request = build_task_request(task_id, prompt, team_name, timeout_ms)
+    try do
+      task_request = build_task_request(task_id, prompt, team_name, timeout_ms)
 
-    case push_task(handle, agent, task_request) do
-      {:ok, :sent} ->
-        emit_dispatched(task_id, agent.id)
-        update_agent_status(agent.id, :working)
-        wait_for_result(handle, task_id, caller_ref, team_name, agent.id, timeout_ms)
+      case push_task(handle, agent, task_request) do
+        {:ok, :sent} ->
+          emit_dispatched(task_id, agent.id)
+          update_agent_status(agent.id, :working)
+          wait_for_result(handle, task_id, caller_ref, team_name, agent.id, timeout_ms)
 
-      {:error, _reason} ->
+        {:error, _reason} ->
+          PendingTasks.cancel_task(handle.pending_tasks, task_id)
+          {:error, :push_failed}
+      end
+    catch
+      kind, reason ->
+        # Clean up the pending task on unexpected exit/throw to prevent ETS leaks
+        # and "unsolicited task result" warnings when the gRPC result arrives later.
         PendingTasks.cancel_task(handle.pending_tasks, task_id)
-        {:error, :push_failed}
+        :erlang.raise(kind, reason, __STACKTRACE__)
     end
   end
 
@@ -254,11 +262,14 @@ defmodule Cortex.Provider.External do
     })
   end
 
-  @spec update_agent_status(String.t(), atom()) :: :ok | {:error, term()}
+  @spec update_agent_status(String.t(), atom()) :: :ok
   defp update_agent_status(agent_id, status) do
     Registry.update_status(agent_id, status)
+    :ok
   rescue
     _ -> :ok
+  catch
+    :exit, _ -> :ok
   end
 
   @spec process_alive?(GenServer.server()) :: boolean()

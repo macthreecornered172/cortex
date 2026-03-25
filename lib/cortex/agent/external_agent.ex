@@ -272,6 +272,11 @@ defmodule Cortex.Agent.ExternalAgent do
         )
 
         {:error, {:dispatch_failed, Exception.message(e)}}
+    catch
+      :exit, reason ->
+        Logger.warning("ExternalAgent #{state.name}: dispatch exited: #{inspect(reason)}")
+
+        {:error, {:dispatch_failed, inspect(reason)}}
     end
   end
 

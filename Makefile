@@ -1,4 +1,4 @@
-.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-all e2e e2e-docker-dag docker-integration e2e-shell e2e-elixir sidecar-build worker-build sidecar-test sidecar-lint sidecar-check
+.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-elixir-all e2e-local e2e-docker-simple e2e-docker-multi e2e-docker-simple-claude e2e-docker-multi-claude docker-integration e2e-shell e2e-elixir sidecar-build worker-build sidecar-test sidecar-lint sidecar-check docker-combo docker-combo-claude
 
 # -- Development --
 
@@ -117,39 +117,65 @@ proto-breaking: ## Check for wire-breaking changes vs main (requires buf)
 proto-check: proto ## CI: regenerate stubs and verify no diff
 	git diff --exit-code sidecar/internal/proto/ lib/cortex/gateway/proto/
 
-# -- Integration & E2E Tests --
+# -- Testing --
 #
 # Test levels (see docs/testing.md for details):
 #
-#   Unit tests (mix test)        — mocked, no external deps
-#   Integration tests            — Docker API, gRPC, real processes (no Claude)
-#   E2E / Smoke tests            — full pipeline with real Claude agent
+#   Unit              — mocked, no external deps
+#   Integration       — Docker API, gRPC, real processes (no Claude)
+#   E2E               — full pipeline, mock agent by default, USE_CLAUDE=1 for real
 #
-# "E2E" in this project means a real Claude agent completes real work.
-# Tests that exercise infrastructure without a real agent are "integration".
+# Quick reference:
+#   make test                   Unit tests only (fast, CI default)
+#   make test-elixir-all        All Elixir tests including integration + e2e tags
+#   make sidecar-test           Go sidecar unit tests
+#   make docker-integration     Docker API lifecycle (8 tests, no Cortex)
+#   make e2e-docker-simple      Docker: single-team DAG (mock agent)
+#   make e2e-docker-multi       Docker: 3-team multi-tier DAG (mock agent)
+#   make e2e-docker-simple-claude  Docker: single-team DAG, real Claude
+#   make e2e-docker-multi-claude   Docker: 3-team DAG, real Claude
+#   make e2e-local              Local processes end-to-end (mock agent)
 
-test-integration: ## Run only @tag :integration tests (requires real claude CLI)
+# --- Unit ---
+
+test-integration: ## Elixir: only @tag :integration tests
 	mix test --only integration
 
-test-all: ## Run ALL tests including integration (requires real claude CLI)
-	mix test --include integration
+test-elixir-all: ## Elixir: ALL tests including integration + e2e tags
+	mix test --include integration --include e2e
 
-e2e: sidecar-build worker-build ## E2E: local processes, real Claude (set USE_CLAUDE=1)
-	cd e2e && go test -v -run TestExternalAgentE2E -timeout 300s
+sidecar-test: ## Go: sidecar unit tests
+	cd sidecar && make test
 
-e2e-docker-dag: sidecar-build worker-build ## E2E: Docker containers, real Claude (set USE_CLAUDE=1)
-	cd e2e && go test -v -run TestDockerDAG -timeout 300s
+# --- Integration (no Claude, no API key) ---
 
-docker-integration: ## Integration: Docker API lifecycle (no Claude, no Cortex)
+docker-integration: ## Docker API lifecycle: container CRUD, networks, labels, logs
 	cd e2e && go test -v -run "^TestDocker[^D]" -timeout 120s
 
-e2e-shell: ## Integration: shell-based sidecar ↔ gRPC ↔ gateway test
-	./test/e2e/sidecar_e2e_test.sh
-
-e2e-elixir: ## Integration: Elixir-side external agent test (no Claude)
+e2e-elixir: ## Elixir-side ExternalAgent pipeline (mock sidecar, no containers)
 	mix test test/e2e/ --include e2e
 
-# -- Sidecar (Go) --
+e2e-shell: ## Shell-based sidecar ↔ gRPC ↔ gateway protocol test
+	./test/e2e/sidecar_e2e_test.sh
+
+# --- E2E ---
+
+e2e-local: sidecar-build worker-build ## Local processes: Cortex + sidecar + worker (mock agent)
+	cd e2e && go test -v -run TestExternalAgentE2E -timeout 300s
+
+e2e-docker-simple: sidecar-build worker-build ## Docker: single-team DAG (mock agent)
+	cd e2e && go test -v -run TestDockerDAGSimple -timeout 300s
+
+e2e-docker-multi: sidecar-build worker-build ## Docker: 3-team multi-tier DAG (mock agent)
+	cd e2e && go test -v -run TestDockerDAGMultiTeam -timeout 300s
+
+e2e-docker-simple-claude: docker-combo-claude sidecar-build worker-build ## Docker: single-team DAG, real Claude
+	USE_CLAUDE=1 cd e2e && go test -v -run TestDockerDAGSimple -timeout 300s
+
+e2e-docker-multi-claude: docker-combo-claude sidecar-build worker-build ## Docker: 3-team DAG, real Claude
+	USE_CLAUDE=1 cd e2e && go test -v -run TestDockerDAGMultiTeam -timeout 300s
+
+# --- Builds ---
 
 sidecar-build: ## Build the Go sidecar binary
 	cd sidecar && make build
@@ -157,13 +183,16 @@ sidecar-build: ## Build the Go sidecar binary
 worker-build: ## Build the Go agent-worker binary
 	cd sidecar && make worker-build
 
-sidecar-test: ## Run sidecar Go tests
-	cd sidecar && make test
-
 sidecar-lint: ## Lint sidecar Go code
 	cd sidecar && make lint
 
 sidecar-check: sidecar-lint sidecar-test sidecar-build ## Full sidecar CI: lint + test + build
+
+docker-combo: ## Build cortex-agent-worker:latest (mock mode, no Claude CLI)
+	cd sidecar && docker build -t cortex-agent-worker:latest -f Dockerfile.combo .
+
+docker-combo-claude: ## Build cortex-agent-worker:latest with Claude CLI
+	cd sidecar && docker build -t cortex-agent-worker:latest -f Dockerfile.combo --build-arg INSTALL_CLAUDE=1 .
 
 # -- Benchmarks --
 

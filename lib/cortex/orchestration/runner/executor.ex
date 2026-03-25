@@ -509,13 +509,27 @@ defmodule Cortex.Orchestration.Runner.Executor do
        ) do
     spawn_handle = maybe_spawn_external(team_name, backend, run_id)
 
-    try do
-      result = run_via_external_agent(team_name, prompt, run_opts)
-      emit_external_telemetry(result, run_opts)
-      result
-    after
-      maybe_stop_external(spawn_handle)
-    end
+    result =
+      try do
+        run_via_external_agent(team_name, prompt, run_opts)
+      catch
+        kind, reason ->
+          # Ensure containers are cleaned up on unexpected crash
+          safe_stop_external_agent(team_name)
+          maybe_stop_external(spawn_handle)
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      end
+
+    emit_external_telemetry(result, run_opts)
+
+    # Stop the ExternalAgent GenServer before tearing down containers.
+    # This ensures the gRPC result delivery has fully resolved and the
+    # PendingTasks entry is cleanly removed before the sidecar's gRPC
+    # stream is destroyed by container stop.
+    safe_stop_external_agent(team_name)
+
+    maybe_stop_external(spawn_handle)
+    result
   end
 
   defp dispatch_to_provider(
@@ -585,9 +599,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
         handle
 
       {:error, reason} ->
-        Logger.warning(
-          "Executor: Docker spawn failed for #{team_name}: #{inspect(reason)}"
-        )
+        Logger.warning("Executor: Docker spawn failed for #{team_name}: #{inspect(reason)}")
 
         nil
     end
@@ -635,6 +647,27 @@ defmodule Cortex.Orchestration.Runner.Executor do
   defp emit_external_telemetry(_result, _run_opts), do: :ok
 
   # -- External agent helpers --------------------------------------------------
+
+  @spec safe_stop_external_agent(String.t()) :: :ok
+  defp safe_stop_external_agent(team_name) do
+    case ExternalSupervisor.find_agent(team_name) do
+      {:ok, pid} ->
+        if Process.alive?(pid) do
+          try do
+            ExternalAgent.stop(pid)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+
+      :not_found ->
+        :ok
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
 
   defp run_via_external_agent(team_name, prompt, run_opts) do
     case ensure_external_agent(team_name) do

@@ -12,7 +12,9 @@
 //
 //	SIDECAR_URL       - Sidecar HTTP API URL (default: http://localhost:9091)
 //	POLL_INTERVAL_MS  - Polling interval in ms (default: 500)
-//	CLAUDE_COMMAND    - Command to run (default: claude)
+//	CLAUDE_COMMAND    - Command to run (default: claude). Set to "mock" for
+//	                    built-in mock mode that returns canned output without
+//	                    any external dependencies (CI-friendly).
 package main
 
 import (
@@ -77,14 +79,23 @@ func main() {
 
 		logger.Info("received task", "task_id", task.TaskID)
 
-		// Run claude -p with the task prompt
+		// Run task — mock mode returns canned output, otherwise runs claude -p
 		start := time.Now()
-		cr, err := runClaude(claudeCmd, task.Prompt)
+		var (
+			cr      *claudeResult
+			runErr  error
+		)
+		if claudeCmd == "mock" {
+			cr = mockResult(task.Prompt)
+			logger.Info("mock agent completed", "task_id", task.TaskID)
+		} else {
+			cr, runErr = runClaude(claudeCmd, task.Prompt)
+		}
 		duration := time.Since(start)
 
-		if err != nil {
-			logger.Error("claude failed", "task_id", task.TaskID, "error", err, "duration", duration)
-			errResult := &claudeResult{ResultText: fmt.Sprintf("claude error: %v", err)}
+		if runErr != nil {
+			logger.Error("claude failed", "task_id", task.TaskID, "error", runErr, "duration", duration)
+			errResult := &claudeResult{ResultText: fmt.Sprintf("claude error: %v", runErr)}
 			submitResult(sidecarURL, task.TaskID, "failed", errResult, duration, logger)
 		} else {
 			logger.Info("claude completed",
@@ -112,6 +123,8 @@ type taskInfo struct {
 	TimeoutMs int64  `json:"timeout_ms"`
 }
 
+// pollTask fetches the next pending task from the sidecar.
+// Returns nil, nil when no task is available.
 func pollTask(sidecarURL string) (*taskInfo, error) {
 	resp, err := http.Get(sidecarURL + "/task")
 	if err != nil {
@@ -145,6 +158,7 @@ type claudeResult struct {
 	SessionID string
 }
 
+// runClaude executes the claude CLI with the given prompt and parses NDJSON output.
 func runClaude(command string, prompt string) (*claudeResult, error) {
 	cmd := exec.Command(command, "-p", prompt, "--output-format", "stream-json", "--verbose")
 	cmd.Stderr = os.Stderr
@@ -172,6 +186,7 @@ func runClaude(command string, prompt string) (*claudeResult, error) {
 	return result, nil
 }
 
+// processEvent extracts fields from a single NDJSON event into the result.
 func processEvent(event map[string]any, result *claudeResult) {
 	eventType, _ := event["type"].(string)
 
@@ -207,8 +222,26 @@ func processEvent(event map[string]any, result *claudeResult) {
 	}
 }
 
+// mockResult returns a canned result that mimics real Claude output.
+// Used when CLAUDE_COMMAND=mock for CI-friendly e2e testing without an API key.
+func mockResult(prompt string) *claudeResult {
+	summary := prompt
+	if len(summary) > 80 {
+		summary = summary[:80] + "..."
+	}
+	return &claudeResult{
+		ResultText:          fmt.Sprintf("Mock agent completed task: %s", summary),
+		InputTokens:         150,
+		OutputTokens:        75,
+		CacheReadTokens:     0,
+		CacheCreationTokens: 0,
+		NumTurns:            1,
+		CostUSD:             0.001,
+		SessionID:           fmt.Sprintf("mock-session-%d", time.Now().UnixNano()),
+	}
+}
 
-
+// extractUsage pulls token counts from a usage map into the result.
 func extractUsage(usage map[string]any, result *claudeResult) {
 	if v, ok := usage["input_tokens"].(float64); ok {
 		result.InputTokens = int(v)
@@ -240,6 +273,7 @@ type resultPayload struct {
 	SessionID           string  `json:"session_id,omitempty"`
 }
 
+// submitResult posts the task result back to the sidecar's HTTP API.
 func submitResult(sidecarURL string, taskID string, status string, cr *claudeResult, duration time.Duration, logger *slog.Logger) {
 	payload := resultPayload{
 		TaskID:              taskID,
@@ -273,6 +307,7 @@ func submitResult(sidecarURL string, taskID string, status string, cr *claudeRes
 
 // --- Sidecar health ---
 
+// waitForSidecar polls the sidecar health endpoint until it responds 200 or the timeout expires.
 func waitForSidecar(sidecarURL string, timeout time.Duration, logger *slog.Logger) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -291,6 +326,7 @@ func waitForSidecar(sidecarURL string, timeout time.Duration, logger *slog.Logge
 
 // --- Env helpers ---
 
+// envOr returns the environment variable value or fallback if unset/empty.
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -298,6 +334,7 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// envDurationMs reads an integer millisecond value from an env var and returns it as a Duration.
 func envDurationMs(key string, fallbackMs int) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if ms, err := strconv.Atoi(v); err == nil {

@@ -6,13 +6,14 @@
 //  2. Start Cortex server
 //  3. POST a multi-team DAG config with backend: docker
 //  4. Cortex auto-spawns Docker containers (sidecar + worker) per team
-//  5. Workers complete tasks via mock claude
+//  5. Workers complete tasks (mock by default, real Claude with USE_CLAUDE=1)
 //  6. Poll until run completes
 //  7. Verify all containers cleaned up
 //
 // Run:
 //
-//	make e2e-docker-dag
+//	make e2e-docker-dag                 # mock agent (no API key needed)
+//	USE_CLAUDE=1 make e2e-docker-dag    # real Claude agent
 //	# or: cd e2e && go test -v -run TestDockerDAG -timeout 300s
 package e2e
 
@@ -199,9 +200,20 @@ func startCortexForDocker(t *testing.T) *exec.Cmd {
 	t.Helper()
 	cmd := exec.Command("mix", "phx.server")
 	cmd.Dir = projectRoot()
+
+	// Default to mock agent (no API key needed). USE_CLAUDE=1 for real Claude.
+	claudeCommand := "mock"
+	if os.Getenv("USE_CLAUDE") != "" {
+		claudeCommand = "claude"
+		t.Log("Using real Claude (USE_CLAUDE=1)")
+	} else {
+		t.Log("Using mock agent (set USE_CLAUDE=1 for real Claude)")
+	}
+
 	cmd.Env = append(os.Environ(),
 		"CORTEX_GATEWAY_TOKEN="+dagAuthToken,
 		"MIX_ENV=dev",
+		"CLAUDE_COMMAND="+claudeCommand,
 	)
 	if testing.Verbose() {
 		cmd.Stdout = os.Stdout
@@ -210,7 +222,7 @@ func startCortexForDocker(t *testing.T) *exec.Cmd {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("Failed to start Cortex: %v", err)
 	}
-	t.Logf("Cortex started (PID %d)", cmd.Process.Pid)
+	t.Logf("Cortex started (PID %d, CLAUDE_COMMAND=%s)", cmd.Process.Pid, claudeCommand)
 	return cmd
 }
 
