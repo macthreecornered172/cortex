@@ -148,25 +148,26 @@ defmodule CortexWeb.WorkflowsLive.Launcher do
     end)
   end
 
-  defp spawn_run(run, _config, _dag, workspace_path) do
+  defp spawn_run(run, config, _dag, workspace_path) do
     yaml = run.config_yaml
     run_id = run.id
 
     Task.start(fn ->
       tmp_path = Path.join(System.tmp_dir!(), "cortex_run_#{run_id}.yaml")
       File.write!(tmp_path, yaml)
+      safe_update_run_status(run, "running")
 
       try do
         result =
           Runner.run(tmp_path,
             workspace_path: workspace_path,
             run_id: run_id,
-            coordinator: true
+            coordinator: config.defaults.provider != :external
           )
 
         case result do
-          {:ok, _summary} ->
-            safe_update_run_status(run, "completed")
+          {:ok, summary} ->
+            safe_update_run_complete(run, summary)
 
           {:error, reason} ->
             safe_update_run_status(run, "failed")

@@ -18,7 +18,8 @@ defmodule Cortex.SpawnBackend.Docker.Handle do
     :team_name,
     :run_id,
     :network_id,
-    docker_client: Cortex.SpawnBackend.Docker.Client
+    docker_client: Cortex.SpawnBackend.Docker.Client,
+    debug: false
   ]
 
   @type t :: %__MODULE__{
@@ -27,6 +28,7 @@ defmodule Cortex.SpawnBackend.Docker.Handle do
           team_name: String.t(),
           run_id: String.t(),
           network_id: String.t(),
-          docker_client: module()
+          docker_client: module(),
+          debug: boolean()
         }
 end

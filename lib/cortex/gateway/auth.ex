@@ -111,7 +111,7 @@ defmodule Cortex.Gateway.Auth.Bearer do
   def authenticate(token, opts \\ []) when is_binary(token) do
     expected =
       case Keyword.get(opts, :token_source) do
-        nil -> System.get_env("CORTEX_GATEWAY_TOKEN")
+        nil -> resolve_expected_token()
         source -> source
       end
 
@@ -121,5 +121,11 @@ defmodule Cortex.Gateway.Auth.Bearer do
     else
       {:error, :unauthorized}
     end
+  end
+
+  defp resolve_expected_token do
+    Application.get_env(:cortex, :gateway_token) ||
+      System.get_env("CORTEX_GATEWAY_TOKEN") ||
+      "dev-token"
   end
 end

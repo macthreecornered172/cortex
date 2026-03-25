@@ -292,6 +292,14 @@ defmodule CortexWeb.WorkflowsLive.MeshPanel do
         <span class="text-sm text-gray-500">Dead timeout:</span>
         <span class="text-sm text-white ml-2">{@config.mesh.dead_timeout_seconds}s</span>
       </div>
+      <div>
+        <span class="text-sm text-gray-500">Provider:</span>
+        <span class="text-sm text-white ml-2">{@config.defaults.provider}</span>
+      </div>
+      <div>
+        <span class="text-sm text-gray-500">Backend:</span>
+        <span class="text-sm text-white ml-2">{@config.defaults.backend}</span>
+      </div>
       <div class="flex flex-wrap gap-1 pt-1">
         <span
           :for={agent <- @config.agents}

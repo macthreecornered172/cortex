@@ -44,6 +44,7 @@ defmodule CortexWeb.WorkflowsLive do
        max_turns: 200,
        provider: "cli",
        backend: "local",
+       docker_debug: false,
 
        # DAG visual state
        dag_teams: [],
@@ -120,6 +121,7 @@ defmodule CortexWeb.WorkflowsLive do
     model = Map.get(params, "model", socket.assigns.model)
     provider = Map.get(params, "provider", socket.assigns.provider)
     backend = Map.get(params, "backend", socket.assigns.backend)
+    docker_debug = Map.get(params, "docker_debug") == "true"
 
     max_turns =
       case Map.get(params, "max_turns") do
@@ -145,6 +147,7 @@ defmodule CortexWeb.WorkflowsLive do
        max_turns: max_turns,
        provider: provider,
        backend: backend,
+       docker_debug: docker_debug,
        mesh_settings: mesh_settings,
        gossip_settings: gossip_settings,
        cluster_context: cluster_context,
@@ -384,6 +387,9 @@ defmodule CortexWeb.WorkflowsLive do
 
       case validate_for_mode(yaml, workspace_path, mode) do
         {:ok, config, warnings, tiers, edges} ->
+          config = apply_ui_overrides(config, socket.assigns)
+          warnings = warnings ++ coordinator_warnings(config, mode)
+
           {:noreply,
            assign(socket,
              validation_result: :ok,
@@ -422,11 +428,15 @@ defmodule CortexWeb.WorkflowsLive do
        socket
        |> put_flash(:error, "Please validate configuration before launching")}
     else
+      config = apply_ui_overrides(config, socket.assigns)
+      Application.put_env(:cortex, :docker_debug, socket.assigns.docker_debug)
+
       yaml =
         if socket.assigns.composition_mode == "visual" do
           generate_yaml_from_visual(socket.assigns)
         else
           effective_yaml(socket)
+          |> inject_yaml_defaults(socket.assigns)
         end
 
       workspace = Launcher.resolve_workspace(config, mode, ui_workspace)
@@ -447,6 +457,63 @@ defmodule CortexWeb.WorkflowsLive do
   end
 
   # -- Private helpers --
+
+  defp coordinator_warnings(config, mode) do
+    coordinator_enabled? =
+      case mode do
+        "mesh" -> config.mesh.coordinator
+        "gossip" -> config.gossip.coordinator
+        _ -> true
+      end
+
+    if coordinator_enabled? and config.defaults.provider == :external do
+      ["coordinator is disabled in external provider mode (it requires a local CLI)"]
+    else
+      []
+    end
+  end
+
+  defp apply_ui_overrides(config, assigns) do
+    provider = to_provider_atom(assigns.provider)
+    backend = to_backend_atom(assigns.backend)
+    defaults = %{config.defaults | provider: provider, backend: backend}
+    %{config | defaults: defaults}
+  end
+
+  defp to_provider_atom("cli"), do: :cli
+  defp to_provider_atom("http"), do: :http
+  defp to_provider_atom("external"), do: :external
+  defp to_provider_atom(atom) when is_atom(atom), do: atom
+  defp to_provider_atom(_), do: :cli
+
+  defp to_backend_atom("local"), do: :local
+  defp to_backend_atom("docker"), do: :docker
+  defp to_backend_atom("k8s"), do: :k8s
+  defp to_backend_atom(atom) when is_atom(atom), do: atom
+  defp to_backend_atom(_), do: :local
+
+  defp inject_yaml_defaults(yaml, assigns) do
+    provider = assigns.provider
+    backend = assigns.backend
+
+    if {provider, backend} == {"cli", "local"} do
+      yaml
+    else
+      # Inject or replace provider/backend under defaults section
+      yaml
+      |> inject_or_replace_yaml_key("provider", provider)
+      |> inject_or_replace_yaml_key("backend", backend)
+    end
+  end
+
+  defp inject_or_replace_yaml_key(yaml, key, value) do
+    if Regex.match?(~r/^\s+#{key}:/m, yaml) do
+      String.replace(yaml, ~r/^(\s+)#{key}:.*$/m, "\\1#{key}: #{value}")
+    else
+      # Insert after defaults: line
+      String.replace(yaml, ~r/(defaults:\n)/m, "\\1  #{key}: #{value}\n", global: false)
+    end
+  end
 
   defp toggle_dep(team, dep) do
     if dep in team.depends_on do
@@ -676,7 +743,7 @@ defmodule CortexWeb.WorkflowsLive do
       available_agents={@available_agents}
       agent_filter={@agent_filter}
     />
-    <DAGPanel.execution_settings provider={@provider} backend={@backend} />
+    <DAGPanel.execution_settings provider={@provider} backend={@backend} docker_debug={@docker_debug} />
     """
   end
 
@@ -693,7 +760,7 @@ defmodule CortexWeb.WorkflowsLive do
       available_agents={@available_agents}
       agent_filter={@agent_filter}
     />
-    <DAGPanel.execution_settings provider={@provider} backend={@backend} />
+    <DAGPanel.execution_settings provider={@provider} backend={@backend} docker_debug={@docker_debug} />
     """
   end
 
@@ -711,7 +778,7 @@ defmodule CortexWeb.WorkflowsLive do
       available_agents={@available_agents}
       agent_filter={@agent_filter}
     />
-    <DAGPanel.execution_settings provider={@provider} backend={@backend} />
+    <DAGPanel.execution_settings provider={@provider} backend={@backend} docker_debug={@docker_debug} />
     """
   end
 
@@ -871,12 +938,19 @@ defmodule CortexWeb.WorkflowsLive do
         ""
       end
 
+    provider_backend =
+      case {assigns[:provider], assigns[:backend]} do
+        {"cli", "local"} -> ""
+        {p, b} when is_binary(p) and is_binary(b) -> "\n  provider: #{p}\n  backend: #{b}"
+        _ -> ""
+      end
+
     """
     name: #{assigns.project_name}
     mode: mesh
     defaults:
       model: #{assigns.model}
-      max_turns: #{assigns.max_turns}
+      max_turns: #{assigns.max_turns}#{provider_backend}
     mesh:
       heartbeat_interval_seconds: #{assigns.mesh_settings.heartbeat}
       suspect_timeout_seconds: #{assigns.mesh_settings.suspect}
@@ -916,12 +990,19 @@ defmodule CortexWeb.WorkflowsLive do
         ""
       end
 
+    provider_backend =
+      case {assigns[:provider], assigns[:backend]} do
+        {"cli", "local"} -> ""
+        {p, b} when is_binary(p) and is_binary(b) -> "\n  provider: #{p}\n  backend: #{b}"
+        _ -> ""
+      end
+
     """
     name: #{assigns.project_name}
     mode: gossip
     defaults:
       model: #{assigns.model}
-      max_turns: #{assigns.max_turns}
+      max_turns: #{assigns.max_turns}#{provider_backend}
     gossip:
       rounds: #{assigns.gossip_settings.rounds}
       topology: #{assigns.gossip_settings.topology}

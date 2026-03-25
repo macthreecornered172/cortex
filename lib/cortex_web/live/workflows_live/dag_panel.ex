@@ -274,18 +274,14 @@ defmodule CortexWeb.WorkflowsLive.DAGPanel do
         <span class="text-sm text-gray-500">Model:</span>
         <span class="text-sm text-white ml-2">{@config.defaults.model}</span>
       </div>
-      <%= if @config.defaults.provider != :cli do %>
-        <div>
-          <span class="text-sm text-gray-500">Provider:</span>
-          <span class="text-sm text-white ml-2">{@config.defaults.provider}</span>
-        </div>
-      <% end %>
-      <%= if @config.defaults.backend != :local do %>
-        <div>
-          <span class="text-sm text-gray-500">Backend:</span>
-          <span class="text-sm text-white ml-2">{@config.defaults.backend}</span>
-        </div>
-      <% end %>
+      <div>
+        <span class="text-sm text-gray-500">Provider:</span>
+        <span class="text-sm text-white ml-2">{@config.defaults.provider}</span>
+      </div>
+      <div>
+        <span class="text-sm text-gray-500">Backend:</span>
+        <span class="text-sm text-white ml-2">{@config.defaults.backend}</span>
+      </div>
       <div class="pt-2">
         <span class="text-sm text-gray-500">Team Names:</span>
         <div class="flex flex-wrap gap-2 mt-1">
@@ -308,6 +304,7 @@ defmodule CortexWeb.WorkflowsLive.DAGPanel do
   """
   attr(:provider, :string, default: "cli")
   attr(:backend, :string, default: "local")
+  attr(:docker_debug, :boolean, default: false)
 
   def execution_settings(assigns) do
     ~H"""
@@ -335,6 +332,18 @@ defmodule CortexWeb.WorkflowsLive.DAGPanel do
           </select>
         </div>
       </div>
+      <%= if @backend == "docker" do %>
+        <label class="flex items-center gap-2 mt-3 cursor-pointer">
+          <input
+            type="checkbox"
+            name="docker_debug"
+            value="true"
+            checked={@docker_debug}
+            class="rounded border-gray-600 bg-gray-950 text-blue-500 focus:ring-blue-500"
+          />
+          <span class="text-xs text-gray-400">Debug mode — preserve containers after run for inspection</span>
+        </label>
+      <% end %>
       <p class="text-xs text-gray-600 mt-2">Docker backend requires provider "External".</p>
     </div>
     """

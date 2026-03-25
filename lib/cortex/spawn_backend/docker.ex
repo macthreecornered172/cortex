@@ -121,22 +121,31 @@ defmodule Cortex.SpawnBackend.Docker do
       network_id: network_id,
       team_name: team_name,
       run_id: run_id,
-      docker_client: client
+      docker_client: client,
+      debug: debug
     } = handle
 
     start_time = System.monotonic_time(:millisecond)
     client_opts = handle_client_opts(handle)
 
-    Logger.info("SpawnBackend.Docker: stopping containers for #{team_name} (run=#{run_id})")
+    if debug do
+      Logger.info(
+        "SpawnBackend.Docker: debug mode — stopping but preserving containers for #{team_name} (run=#{run_id}). " <>
+          "Inspect with: docker logs #{container_name(run_id, team_name, "worker")} / docker logs #{container_name(run_id, team_name, "sidecar")}"
+      )
 
-    # Stop worker first, then sidecar
-    safe_stop_remove(client, worker_id, client_opts)
-    safe_stop_remove(client, sidecar_id, client_opts)
+      safe_stop(client, worker_id, client_opts)
+      safe_stop(client, sidecar_id, client_opts)
+    else
+      Logger.info("SpawnBackend.Docker: stopping containers for #{team_name} (run=#{run_id})")
 
-    # Remove network
-    case client.remove_network(network_id, client_opts) do
-      :ok -> :ok
-      {:error, reason} -> Logger.debug("Docker: network remove: #{inspect(reason)}")
+      safe_stop_remove(client, worker_id, client_opts)
+      safe_stop_remove(client, sidecar_id, client_opts)
+
+      case client.remove_network(network_id, client_opts) do
+        :ok -> :ok
+        {:error, reason} -> Logger.debug("Docker: network remove: #{inspect(reason)}")
+      end
     end
 
     duration = System.monotonic_time(:millisecond) - start_time
@@ -201,7 +210,8 @@ defmodule Cortex.SpawnBackend.Docker do
         team_name: team_name,
         run_id: run_id,
         network_id: network_id,
-        docker_client: client
+        docker_client: client,
+        debug: Keyword.get(opts, :debug, false)
       }
 
       {:ok, handle}
@@ -310,6 +320,16 @@ defmodule Cortex.SpawnBackend.Docker do
     |> String.trim_leading("-")
     |> String.trim_trailing("-")
     |> String.slice(0, 30)
+  end
+
+  @spec safe_stop(module(), String.t(), keyword()) :: :ok
+  defp safe_stop(client, container_id, client_opts) do
+    case client.stop_container(container_id, client_opts) do
+      :ok -> :ok
+      {:error, reason} -> Logger.debug("Docker: stop container: #{inspect(reason)}")
+    end
+
+    :ok
   end
 
   @spec safe_stop_remove(module(), String.t(), keyword()) :: :ok
