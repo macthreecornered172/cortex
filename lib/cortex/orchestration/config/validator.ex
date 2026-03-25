@@ -24,8 +24,6 @@ defmodule Cortex.Orchestration.Config.Validator do
     - Team with more than 5 members
     - Task with empty details
     - Task with empty verify command
-    - `backend: :docker` or `:k8s` with `provider: :cli` (unusual combination)
-
   """
 
   alias Cortex.Orchestration.Config
@@ -68,6 +66,7 @@ defmodule Cortex.Orchestration.Config.Validator do
     |> validate_depends_on(config)
     |> validate_no_cycles(config)
     |> validate_provider_backend(config)
+    |> validate_backend_requires_external(config)
     |> Enum.reverse()
   end
 
@@ -256,6 +255,28 @@ defmodule Cortex.Orchestration.Config.Validator do
     end)
   end
 
+  # backend: docker/k8s requires provider: external — the CLI provider runs
+  # claude as a local Erlang port, which can't work inside a container.
+  defp validate_backend_requires_external(errors, %Config{defaults: defaults, teams: teams}) do
+    errors = check_provider_backend_compat(errors, defaults.provider, defaults.backend, "defaults")
+
+    Enum.reduce(teams, errors, fn team, acc ->
+      effective_provider = team.provider || defaults.provider
+      effective_backend = team.backend || defaults.backend
+
+      check_provider_backend_compat(acc, effective_provider, effective_backend, "team '#{team.name}'")
+    end)
+  end
+
+  defp check_provider_backend_compat(errors, provider, backend, context)
+       when backend in [:docker, :k8s] and provider != :external do
+    [
+      "#{context}: backend '#{backend}' requires provider 'external' (got '#{provider}')" | errors
+    ]
+  end
+
+  defp check_provider_backend_compat(errors, _provider, _backend, _context), do: errors
+
   # --- Soft Warning Collection ---
 
   defp collect_warnings(%Config{defaults: defaults, teams: teams}) do
@@ -267,13 +288,6 @@ defmodule Cortex.Orchestration.Config.Validator do
         provider_backend_warnings(effective_provider, effective_backend, "team '#{team.name}'") ++
           member_warnings(team) ++ task_warnings(team)
       end)
-  end
-
-  defp provider_backend_warnings(:cli, backend, context)
-       when backend in [:docker, :k8s] do
-    [
-      "#{context}: backend '#{backend}' with provider 'cli' is unusual — CLI provider requires a local port"
-    ]
   end
 
   defp provider_backend_warnings(_provider, _backend, _context), do: []

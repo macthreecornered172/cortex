@@ -259,8 +259,8 @@ defmodule Cortex.Orchestration.Config.ValidatorTest do
     end
 
     test "valid backend values pass" do
-      for backend <- [:local, :docker, :k8s] do
-        config = %{valid_config() | defaults: %Defaults{backend: backend}}
+      for {backend, provider} <- [{:local, :cli}, {:docker, :external}, {:k8s, :external}] do
+        config = %{valid_config() | defaults: %Defaults{backend: backend, provider: provider}}
         assert {:ok, %Config{}, _warnings} = Validator.validate(config)
       end
     end
@@ -412,7 +412,7 @@ defmodule Cortex.Orchestration.Config.ValidatorTest do
       assert warnings == []
     end
 
-    test "backend :docker with provider :cli produces a warning" do
+    test "backend :docker with provider :cli is a hard error" do
       config = %{valid_config() | defaults: %Defaults{provider: :cli, backend: :docker}}
 
       config =
@@ -420,11 +420,11 @@ defmodule Cortex.Orchestration.Config.ValidatorTest do
           %{team | tasks: [%Task{summary: "Work", details: "Do it", verify: "make test"}]}
         end)
 
-      assert {:ok, _config, warnings} = Validator.validate(config)
-      assert Enum.any?(warnings, &String.contains?(&1, "unusual"))
+      assert {:error, errors} = Validator.validate(config)
+      assert Enum.any?(errors, &String.contains?(&1, "requires provider 'external'"))
     end
 
-    test "backend :k8s with provider :cli produces a warning" do
+    test "backend :k8s with provider :cli is a hard error" do
       config = %{valid_config() | defaults: %Defaults{provider: :cli, backend: :k8s}}
 
       config =
@@ -432,11 +432,22 @@ defmodule Cortex.Orchestration.Config.ValidatorTest do
           %{team | tasks: [%Task{summary: "Work", details: "Do it", verify: "make test"}]}
         end)
 
-      assert {:ok, _config, warnings} = Validator.validate(config)
-      assert Enum.any?(warnings, &String.contains?(&1, "unusual"))
+      assert {:error, errors} = Validator.validate(config)
+      assert Enum.any?(errors, &String.contains?(&1, "requires provider 'external'"))
     end
 
-    test "backend :local with provider :cli produces no provider/backend warning" do
+    test "backend :docker with provider :external passes" do
+      config = %{valid_config() | defaults: %Defaults{provider: :external, backend: :docker}}
+
+      config =
+        update_first_team(config, fn team ->
+          %{team | tasks: [%Task{summary: "Work", details: "Do it", verify: "make test"}]}
+        end)
+
+      assert {:ok, _config, _warnings} = Validator.validate(config)
+    end
+
+    test "backend :local with provider :cli passes" do
       config =
         update_first_team(valid_config(), fn team ->
           %{
@@ -446,11 +457,10 @@ defmodule Cortex.Orchestration.Config.ValidatorTest do
           }
         end)
 
-      assert {:ok, _config, warnings} = Validator.validate(config)
-      refute Enum.any?(warnings, &String.contains?(&1, "unusual"))
+      assert {:ok, _config, _warnings} = Validator.validate(config)
     end
 
-    test "team-level backend :docker with inherited :cli provider produces a warning" do
+    test "team-level backend :docker with inherited :cli provider is a hard error" do
       config =
         update_first_team(valid_config(), fn team ->
           %{
@@ -460,8 +470,8 @@ defmodule Cortex.Orchestration.Config.ValidatorTest do
           }
         end)
 
-      assert {:ok, _config, warnings} = Validator.validate(config)
-      assert Enum.any?(warnings, &String.contains?(&1, "unusual"))
+      assert {:error, errors} = Validator.validate(config)
+      assert Enum.any?(errors, &String.contains?(&1, "requires provider 'external'"))
     end
   end
 
