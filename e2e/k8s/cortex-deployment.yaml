@@ -1,0 +1,74 @@
+# Cortex server deployment for K8s e2e tests.
+# Runs inside kind with in-cluster K8s access via cortex-sa service account.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cortex
+  namespace: default
+  labels:
+    app: cortex
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cortex
+  template:
+    metadata:
+      labels:
+        app: cortex
+    spec:
+      serviceAccountName: cortex-sa
+      containers:
+        - name: cortex
+          image: cortex:latest
+          imagePullPolicy: Never
+          env:
+            - name: SECRET_KEY_BASE
+              value: "e2e_test_secret_key_that_is_at_least_64_bytes_long_for_testing_purposes_only"
+            - name: PHX_HOST
+              value: "localhost"
+            - name: PORT
+              value: "4000"
+            - name: GRPC_PORT
+              value: "4001"
+            - name: CORTEX_GATEWAY_TOKEN
+              value: "e2e-k8s-dag-token"
+            - name: DATABASE_PATH
+              value: "/app/data/cortex.db"
+            - name: CLAUDE_COMMAND
+              value: "mock"
+            - name: CLAUDE_MODEL
+              value: "haiku"
+            - name: CLAUDE_MAX_TURNS
+              value: "3"
+            - name: CLAUDE_PERMISSION_MODE
+              value: "bypassPermissions"
+            - name: SPAWN_BACKEND
+              value: "k8s"
+            - name: K8S_NAMESPACE
+              value: "default"
+            - name: K8S_GATEWAY_URL
+              value: "cortex:4001"
+            - name: K8S_SIDECAR_IMAGE
+              value: "cortex-agent-worker:latest"
+            - name: K8S_IMAGE_PULL_POLICY
+              value: "Never"
+          ports:
+            - containerPort: 4000
+              name: http
+            - containerPort: 4001
+              name: grpc
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 4000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 10
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: data
+          emptyDir: {}

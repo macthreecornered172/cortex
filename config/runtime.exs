@@ -42,4 +42,27 @@ if config_env() == :prod do
   if token = System.get_env("CORTEX_GATEWAY_TOKEN") do
     config :cortex, Cortex.Gateway, auth_token: token
   end
+
+  # Default spawn backend (docker | k8s | local)
+  if backend = System.get_env("SPAWN_BACKEND") do
+    config :cortex, :default_spawn_backend, String.to_atom(backend)
+  end
+
+  # K8s spawn backend config overrides
+  k8s_overrides =
+    [
+      {System.get_env("K8S_NAMESPACE"), :namespace},
+      {System.get_env("K8S_GATEWAY_URL"), :gateway_url},
+      {System.get_env("K8S_SIDECAR_IMAGE"), :sidecar_image},
+      {System.get_env("K8S_WORKER_IMAGE"), :worker_image},
+      {System.get_env("K8S_IMAGE_PULL_POLICY"), :image_pull_policy}
+    ]
+    |> Enum.flat_map(fn
+      {nil, _key} -> []
+      {val, key} -> [{key, val}]
+    end)
+
+  if k8s_overrides != [] do
+    config :cortex, Cortex.SpawnBackend.K8s, k8s_overrides
+  end
 end

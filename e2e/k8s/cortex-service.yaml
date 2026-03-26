@@ -1,0 +1,19 @@
+# ClusterIP service for Cortex — used by port-forward and agent pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: cortex
+  namespace: default
+  labels:
+    app: cortex
+spec:
+  type: ClusterIP
+  selector:
+    app: cortex
+  ports:
+    - name: http
+      port: 4000
+      targetPort: 4000
+    - name: grpc
+      port: 4001
+      targetPort: 4001

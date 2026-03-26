@@ -194,9 +194,12 @@ defmodule Cortex.SpawnBackend.K8s.PodSpec do
           ]
       end
 
-    %{
+    image_pull_policy = Keyword.get(opts, :image_pull_policy, default_image_pull_policy())
+
+    container = %{
       "name" => "sidecar",
       "image" => sidecar_image,
+      "command" => ["/cortex-sidecar"],
       "env" => env,
       "ports" => [%{"containerPort" => @default_sidecar_port}],
       "resources" => sidecar_resources,
@@ -211,6 +214,12 @@ defmodule Cortex.SpawnBackend.K8s.PodSpec do
         "periodSeconds" => 10
       }
     }
+
+    if image_pull_policy do
+      Map.put(container, "imagePullPolicy", image_pull_policy)
+    else
+      container
+    end
   end
 
   @spec worker_container(keyword()) :: map()
@@ -218,24 +227,37 @@ defmodule Cortex.SpawnBackend.K8s.PodSpec do
     worker_image = Keyword.get(opts, :worker_image, default_worker_image())
     resources = Keyword.get(opts, :resources, %{})
     worker_resources = Map.get(resources, :worker, default_worker_resources())
+    image_pull_policy = Keyword.get(opts, :image_pull_policy, default_image_pull_policy())
+    extra_env = Keyword.get(opts, :worker_env, [])
 
-    %{
-      "name" => "worker",
-      "image" => worker_image,
-      "env" => [
-        %{"name" => "SIDECAR_URL", "value" => "http://localhost:#{@default_sidecar_port}"},
-        %{
-          "name" => "ANTHROPIC_API_KEY",
-          "valueFrom" => %{
-            "secretKeyRef" => %{
-              "name" => "anthropic-api-key",
-              "key" => "key"
-            }
+    base_env = [
+      %{"name" => "SIDECAR_URL", "value" => "http://localhost:#{@default_sidecar_port}"},
+      %{
+        "name" => "ANTHROPIC_API_KEY",
+        "valueFrom" => %{
+          "secretKeyRef" => %{
+            "name" => "anthropic-api-key",
+            "key" => "key"
           }
         }
-      ],
+      }
+    ]
+
+    env = base_env ++ Enum.map(extra_env, fn {k, v} -> %{"name" => k, "value" => v} end)
+
+    container = %{
+      "name" => "worker",
+      "image" => worker_image,
+      "command" => ["/agent-worker"],
+      "env" => env,
       "resources" => worker_resources
     }
+
+    if image_pull_policy do
+      Map.put(container, "imagePullPolicy", image_pull_policy)
+    else
+      container
+    end
   end
 
   @spec default_sidecar_resources() :: map()
@@ -276,5 +298,11 @@ defmodule Cortex.SpawnBackend.K8s.PodSpec do
   defp default_gateway_url do
     app_config = Application.get_env(:cortex, Cortex.SpawnBackend.K8s, [])
     Keyword.get(app_config, :gateway_url, "cortex-gateway:4001")
+  end
+
+  @spec default_image_pull_policy() :: String.t() | nil
+  defp default_image_pull_policy do
+    app_config = Application.get_env(:cortex, Cortex.SpawnBackend.K8s, [])
+    Keyword.get(app_config, :image_pull_policy)
   end
 end

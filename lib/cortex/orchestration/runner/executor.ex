@@ -30,6 +30,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
   alias Cortex.Provider.Resolver, as: ProviderResolver
   alias Cortex.SpawnBackend.Docker, as: DockerBackend
   alias Cortex.SpawnBackend.ExternalSpawner
+  alias Cortex.SpawnBackend.K8s, as: K8sBackend
   alias Cortex.Store.Schemas.TeamRun, as: TeamRunSchema
   alias Cortex.Telemetry, as: Tel
 
@@ -615,13 +616,52 @@ defmodule Cortex.Orchestration.Runner.Executor do
     end
   end
 
+  defp maybe_spawn_external(team_name, :k8s, run_id, run_opts) do
+    Logger.info("Executor: spawning K8s pod for #{team_name} (run=#{run_id})")
+
+    auth_token = Application.get_env(:cortex, Cortex.Gateway, []) |> Keyword.get(:auth_token)
+
+    worker_env =
+      [
+        {"CLAUDE_COMMAND", System.get_env("CLAUDE_COMMAND")},
+        {"CLAUDE_MODEL", to_string(run_opts[:model])},
+        {"CLAUDE_MAX_TURNS", to_string(run_opts[:max_turns])},
+        {"CLAUDE_PERMISSION_MODE", to_string(run_opts[:permission_mode])},
+        {"POLL_INTERVAL_MS", System.get_env("POLL_INTERVAL_MS")}
+      ]
+      |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
+
+    spawn_opts = [
+      team_name: team_name,
+      run_id: run_id,
+      auth_token: auth_token,
+      worker_env: worker_env
+    ]
+
+    case K8sBackend.spawn(spawn_opts) do
+      {:ok, handle} ->
+        Logger.info("Executor: K8s pod spawned for #{team_name}")
+        handle
+
+      {:error, reason} ->
+        Logger.warning("Executor: K8s spawn failed for #{team_name}: #{inspect(reason)}")
+        nil
+    end
+  end
+
   defp maybe_spawn_external(_team_name, _backend, _run_id, _run_opts), do: nil
 
-  @spec maybe_stop_external(ExternalSpawner.handle() | DockerBackend.Handle.t() | nil) :: :ok
+  @spec maybe_stop_external(
+          ExternalSpawner.handle() | DockerBackend.Handle.t() | K8sBackend.Handle.t() | nil
+        ) :: :ok
   defp maybe_stop_external(nil), do: :ok
 
   defp maybe_stop_external(%DockerBackend.Handle{} = handle) do
     DockerBackend.stop(handle)
+  end
+
+  defp maybe_stop_external(%K8sBackend.Handle{} = handle) do
+    K8sBackend.stop(handle)
   end
 
   defp maybe_stop_external(handle), do: ExternalSpawner.stop(handle)
