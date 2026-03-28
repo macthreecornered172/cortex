@@ -31,6 +31,9 @@ defmodule Cortex.Output.Store do
   @doc "Deletes content at the given key."
   @callback delete(key()) :: :ok | {:error, term()}
 
+  @doc "Lists all keys under the given prefix."
+  @callback list_keys(String.t()) :: {:ok, [key()]} | {:error, term()}
+
   # -- Convenience delegators --------------------------------------------------
 
   @doc "Stores content using the configured backend."
@@ -51,10 +54,22 @@ defmodule Cortex.Output.Store do
     backend().delete(key)
   end
 
+  @doc "Lists all keys under the given prefix using the configured backend."
+  @spec list_keys(String.t()) :: {:ok, [key()]} | {:error, term()}
+  def list_keys(prefix) do
+    backend().list_keys(prefix)
+  end
+
   @doc "Builds a storage key for a team's output within a run."
   @spec build_key(String.t(), String.t()) :: key()
   def build_key(run_id, team_name) do
     "runs/#{run_id}/teams/#{team_name}/output"
+  end
+
+  @doc "Builds a storage key for a workspace file within a run."
+  @spec build_workspace_key(String.t(), String.t()) :: key()
+  def build_workspace_key(run_id, relative_path) do
+    "runs/#{run_id}/workspace/#{relative_path}"
   end
 
   @spec backend() :: module()

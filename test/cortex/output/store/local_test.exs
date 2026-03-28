@@ -1,5 +1,5 @@
 defmodule Cortex.Output.Store.LocalTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Cortex.Output.Store.Local
 
@@ -59,6 +59,31 @@ defmodule Cortex.Output.Store.LocalTest do
 
     test "succeeds for non-existent key" do
       assert :ok = Local.delete("nonexistent/key")
+    end
+  end
+
+  describe "list_keys/1" do
+    test "lists files under a prefix" do
+      :ok = Local.put("runs/r1/workspace/state.json", "s")
+      :ok = Local.put("runs/r1/workspace/results/backend.json", "r")
+      :ok = Local.put("runs/r1/workspace/logs/run/backend.log", "l")
+      :ok = Local.put("runs/r2/workspace/state.json", "other")
+
+      assert {:ok, keys} = Local.list_keys("runs/r1/workspace/")
+      assert length(keys) == 3
+      assert "runs/r1/workspace/state.json" in keys
+      assert "runs/r1/workspace/results/backend.json" in keys
+      assert "runs/r1/workspace/logs/run/backend.log" in keys
+      refute "runs/r2/workspace/state.json" in keys
+    end
+
+    test "returns empty list for nonexistent prefix" do
+      assert {:ok, []} = Local.list_keys("nonexistent/prefix/")
+    end
+
+    test "returns empty list for empty directory" do
+      :ok = Local.put("runs/r1/workspace/file.txt", "x")
+      assert {:ok, []} = Local.list_keys("runs/r1/other/")
     end
   end
 end

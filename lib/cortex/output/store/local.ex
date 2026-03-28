@@ -48,6 +48,37 @@ defmodule Cortex.Output.Store.Local do
     end
   end
 
+  @impl true
+  @spec list_keys(String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def list_keys(prefix) when is_binary(prefix) do
+    full_path = key_to_path(prefix)
+
+    if File.dir?(full_path) do
+      keys =
+        full_path
+        |> walk_files()
+        |> Enum.map(&Path.relative_to(&1, base_path()))
+        |> Enum.sort()
+
+      {:ok, keys}
+    else
+      {:ok, []}
+    end
+  end
+
+  @spec walk_files(String.t()) :: [String.t()]
+  defp walk_files(dir) do
+    case File.ls(dir) do
+      {:ok, entries} -> Enum.flat_map(entries, &expand_entry(dir, &1))
+      {:error, _} -> []
+    end
+  end
+
+  defp expand_entry(dir, entry) do
+    path = Path.join(dir, entry)
+    if File.dir?(path), do: walk_files(path), else: [path]
+  end
+
   @spec key_to_path(String.t()) :: String.t()
   defp key_to_path(key) do
     Path.join(base_path(), key)

@@ -26,6 +26,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
   alias Cortex.Orchestration.Summary
   alias Cortex.Orchestration.TeamResult
   alias Cortex.Orchestration.Workspace
+  alias Cortex.Orchestration.WorkspaceSync
   alias Cortex.Provider.External, as: ProviderExternal
   alias Cortex.Provider.Resolver, as: ProviderResolver
   alias Cortex.SpawnBackend.Docker, as: DockerBackend
@@ -98,6 +99,8 @@ defmodule Cortex.Orchestration.Runner.Executor do
           team_names: watcher_names
         )
 
+      sync_pid = safe_start_workspace_sync(run_id, workspace_path)
+
       broadcast(:run_started, %{project: config.name, teams: team_names})
       Tel.emit_run_started(%{project: config.name, teams: team_names})
 
@@ -115,6 +118,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
 
       run_duration = System.monotonic_time(:millisecond) - run_start
 
+      safe_finalize_workspace_sync(sync_pid)
       finalize_fresh(result, run_id, config, workspace, run_duration)
     end
   end
@@ -180,6 +184,8 @@ defmodule Cortex.Orchestration.Runner.Executor do
           team_names: team_names ++ [CoordConfig.name()]
         )
 
+      sync_pid = safe_start_workspace_sync(run_id, workspace_path)
+
       broadcast(:run_started, %{project: config.name, teams: team_names})
       Tel.emit_run_started(%{project: config.name, teams: team_names})
 
@@ -195,6 +201,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
 
       run_duration = System.monotonic_time(:millisecond) - run_start
 
+      safe_finalize_workspace_sync(sync_pid)
       finalize_continuation(result, run_id, config, run_duration)
     end
   end
@@ -900,6 +907,30 @@ defmodule Cortex.Orchestration.Runner.Executor do
     end
   rescue
     _ -> nil
+  end
+
+  defp safe_start_workspace_sync(nil, _workspace_path), do: nil
+
+  defp safe_start_workspace_sync(run_id, workspace_path) do
+    case WorkspaceSync.start(run_id: run_id, workspace_path: workspace_path) do
+      {:ok, pid} -> pid
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp safe_finalize_workspace_sync(nil), do: :ok
+
+  defp safe_finalize_workspace_sync(pid) do
+    if Process.alive?(pid) do
+      WorkspaceSync.final_sync(pid)
+      WorkspaceSync.stop(pid)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
   end
 
   # -- Run store persistence helpers ------------------------------------------

@@ -31,6 +31,8 @@ defmodule CortexWeb.Router do
     resources("/runs", RunController, only: [:index, :create, :show]) do
       resources("/teams", TeamRunController, only: [:index, :show], param: "name")
       get("/teams/:name/output", TeamRunController, :output)
+      get("/workspace", WorkspaceController, :index)
+      get("/workspace/*path", WorkspaceController, :show)
     end
   end
 

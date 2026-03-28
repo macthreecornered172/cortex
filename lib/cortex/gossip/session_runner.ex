@@ -37,6 +37,7 @@ defmodule Cortex.Gossip.SessionRunner do
   alias Cortex.Messaging.InboxBridge
   alias Cortex.Orchestration.Spawner
   alias Cortex.Orchestration.TeamResult
+  alias Cortex.Orchestration.WorkspaceSync
   alias Cortex.Telemetry, as: Tel
 
   require Logger
@@ -138,6 +139,9 @@ defmodule Cortex.Gossip.SessionRunner do
       # Step 4b: Create TeamRun records so the UI can track agents
       create_team_run_records(run_id, config, workspace_path)
 
+      # Step 4c: Start workspace sync
+      sync_pid = safe_start_workspace_sync(run_id, workspace_path)
+
       # Persist gossip round total to DB
       persist_gossip_rounds(run_id, 0, config.gossip.rounds)
 
@@ -182,6 +186,9 @@ defmodule Cortex.Gossip.SessionRunner do
 
       # Step 10b: Update TeamRun records with final results
       update_team_run_records(run_id, results)
+
+      # Step 10c: Final workspace sync
+      safe_finalize_workspace_sync(sync_pid)
 
       # Step 11: Write end-of-run summary to .cortex/summaries/
       write_run_summary(workspace_path, config, results, all_entries, run_duration)
@@ -1110,6 +1117,28 @@ defmodule Cortex.Gossip.SessionRunner do
   defp truncate(other, max), do: inspect(other) |> truncate(max)
 
   @spec broadcast(atom(), map()) :: :ok
+  defp safe_start_workspace_sync(run_id, workspace_path) do
+    case WorkspaceSync.start(run_id: run_id, workspace_path: workspace_path) do
+      {:ok, pid} -> pid
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp safe_finalize_workspace_sync(nil), do: :ok
+
+  defp safe_finalize_workspace_sync(pid) do
+    if Process.alive?(pid) do
+      WorkspaceSync.final_sync(pid)
+      WorkspaceSync.stop(pid)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
   defp broadcast(type, payload) do
     Cortex.Events.broadcast(type, payload)
     :ok
