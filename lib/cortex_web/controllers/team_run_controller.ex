@@ -3,13 +3,15 @@ defmodule CortexWeb.TeamRunController do
   JSON API controller for team runs within an orchestration run.
 
   Exposes:
-    GET  /api/runs/:run_id/teams       — list all team runs for a run
-    GET  /api/runs/:run_id/teams/:name — fetch a specific team run by name
+    GET  /api/runs/:run_id/teams              — list all team runs for a run
+    GET  /api/runs/:run_id/teams/:name        — fetch a specific team run by name
+    GET  /api/runs/:run_id/teams/:name/output — fetch the full output content
   """
   use CortexWeb, :controller
 
   action_fallback(CortexWeb.FallbackController)
 
+  alias Cortex.Output.Store, as: OutputStore
   alias Cortex.Store
   alias Cortex.Store.Schemas.TeamRun
 
@@ -41,6 +43,26 @@ defmodule CortexWeb.TeamRunController do
     end
   end
 
+  @doc "Fetch the full output content for a team run."
+  @spec output(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def output(conn, %{"run_id" => run_id, "name" => team_name}) do
+    with run when not is_nil(run) <- Store.get_run(run_id),
+         %TeamRun{output_key: key} when not is_nil(key) <-
+           Store.get_team_run(run_id, team_name),
+         {:ok, content} <- OutputStore.get(key) do
+      json(conn, %{
+        data: %{
+          run_id: run_id,
+          team_name: team_name,
+          content: content,
+          size_bytes: byte_size(content)
+        }
+      })
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
   # ── Private ──────────────────────────────────────────────────────────
 
   defp serialize_team_run(%TeamRun{} = tr) do
@@ -60,6 +82,7 @@ defmodule CortexWeb.TeamRunController do
       num_turns: tr.num_turns,
       session_id: tr.session_id,
       result_summary: tr.result_summary,
+      has_output: tr.output_key != nil,
       log_path: tr.log_path,
       started_at: tr.started_at,
       completed_at: tr.completed_at,

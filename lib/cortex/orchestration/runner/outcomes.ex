@@ -20,6 +20,7 @@ defmodule Cortex.Orchestration.Runner.Outcomes do
   alias Cortex.Orchestration.Runner.Store, as: RunnerStore
   alias Cortex.Orchestration.TeamResult
   alias Cortex.Orchestration.Workspace
+  alias Cortex.Output.Store, as: OutputStore
   alias Cortex.Telemetry, as: Tel
 
   # -- Workspace outcomes -----------------------------------------------------
@@ -136,6 +137,8 @@ defmodule Cortex.Orchestration.Runner.Outcomes do
   def apply_store_outcome(nil, _outcome), do: :ok
 
   def apply_store_outcome(run_id, {team_name, _status, %{type: :success, result: result}}) do
+    output_key = store_output(run_id, team_name, result.result)
+
     RunnerStore.safe_call(fn ->
       case Cortex.Store.get_team_run(run_id, team_name) do
         nil ->
@@ -153,6 +156,7 @@ defmodule Cortex.Orchestration.Runner.Outcomes do
             num_turns: result.num_turns,
             session_id: result.session_id,
             result_summary: RunnerStore.truncate_summary(result.result),
+            output_key: output_key,
             completed_at: DateTime.utc_now()
           })
       end
@@ -162,6 +166,8 @@ defmodule Cortex.Orchestration.Runner.Outcomes do
   end
 
   def apply_store_outcome(run_id, {team_name, _status, %{type: :failure, result: result}}) do
+    output_key = store_output(run_id, team_name, result.result)
+
     RunnerStore.safe_call(fn ->
       case Cortex.Store.get_team_run(run_id, team_name) do
         nil ->
@@ -179,6 +185,7 @@ defmodule Cortex.Orchestration.Runner.Outcomes do
             num_turns: result.num_turns,
             session_id: result.session_id,
             result_summary: RunnerStore.truncate_summary(result.result),
+            output_key: output_key,
             completed_at: DateTime.utc_now()
           })
       end
@@ -203,6 +210,20 @@ defmodule Cortex.Orchestration.Runner.Outcomes do
     end)
 
     :ok
+  end
+
+  # -- Output storage ----------------------------------------------------------
+
+  @spec store_output(String.t(), String.t(), String.t() | nil) :: String.t() | nil
+  defp store_output(_run_id, _team_name, nil), do: nil
+
+  defp store_output(run_id, team_name, content) when is_binary(content) do
+    key = OutputStore.build_key(run_id, team_name)
+
+    case OutputStore.put(key, content) do
+      :ok -> key
+      {:error, _} -> nil
+    end
   end
 
   # -- Result file writing ----------------------------------------------------

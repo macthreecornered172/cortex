@@ -23,6 +23,7 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
   alias Cortex.Orchestration.State
   alias Cortex.Orchestration.TeamResult
   alias Cortex.Orchestration.Workspace
+  alias Cortex.Output.Store, as: OutputStore
   alias Cortex.Store
 
   require Logger
@@ -270,6 +271,7 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
 
   defp apply_success_reconciliation(team_run, report, workspace, run_id) do
     new_status = "completed"
+    output_key = store_output(run_id, team_run.team_name, report.result_text)
 
     Workspace.update_team_state(workspace, team_run.team_name,
       status: "done",
@@ -291,6 +293,7 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
       output_tokens: report.total_output_tokens,
       session_id: report.session_id,
       result_summary: RunnerStore.truncate_summary(report.result_text),
+      output_key: output_key,
       completed_at: DateTime.utc_now()
     })
 
@@ -307,6 +310,7 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
 
   defp apply_failure_reconciliation(team_run, report, workspace, run_id) do
     new_status = "failed"
+    output_key = store_output(run_id, team_run.team_name, report.result_text)
 
     Workspace.update_team_state(workspace, team_run.team_name,
       status: "failed",
@@ -324,6 +328,7 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
       cost_usd: report.cost_usd,
       session_id: report.session_id,
       result_summary: RunnerStore.truncate_summary(report.result_text),
+      output_key: output_key,
       completed_at: DateTime.utc_now()
     })
 
@@ -335,6 +340,18 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
         detail: "log shows exit: #{report.diagnosis_detail}"
       }
     ]
+  end
+
+  @spec store_output(String.t(), String.t(), String.t() | nil) :: String.t() | nil
+  defp store_output(_run_id, _team_name, nil), do: nil
+
+  defp store_output(run_id, team_name, content) when is_binary(content) do
+    key = OutputStore.build_key(run_id, team_name)
+
+    case OutputStore.put(key, content) do
+      :ok -> key
+      {:error, _} -> nil
+    end
   end
 
   defp update_team_run_in_store(run_id, team_name, attrs) do

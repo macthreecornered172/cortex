@@ -652,7 +652,10 @@ defmodule Cortex.Orchestration.Runner.Executor do
   defp maybe_spawn_external(_team_name, _backend, _run_id, _run_opts), do: nil
 
   @spec maybe_stop_external(
-          ExternalSpawner.handle() | DockerBackend.Handle.t() | K8sBackend.Handle.t() | nil
+          ExternalSpawner.handle()
+          | DockerBackend.Handle.t()
+          | K8sBackend.Handle.t()
+          | nil
         ) :: :ok
   defp maybe_stop_external(nil), do: :ok
 
