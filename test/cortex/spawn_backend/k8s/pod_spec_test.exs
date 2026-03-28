@@ -117,9 +117,9 @@ defmodule Cortex.SpawnBackend.K8s.PodSpecTest do
       spec = PodSpec.build(@default_opts)
       sidecar = find_container(spec, "sidecar")
 
-      assert sidecar["readinessProbe"]["httpGet"]["path"] == "/healthz"
+      assert sidecar["readinessProbe"]["httpGet"]["path"] == "/health"
       assert sidecar["readinessProbe"]["httpGet"]["port"] == 9091
-      assert sidecar["livenessProbe"]["httpGet"]["path"] == "/healthz"
+      assert sidecar["livenessProbe"]["httpGet"]["path"] == "/health"
       assert sidecar["livenessProbe"]["httpGet"]["port"] == 9091
     end
 
