@@ -26,6 +26,8 @@ Built on Elixir/OTP because the problem is inherently concurrent — dozens of l
 
 - [Modes](#modes)
 - [Features](#features)
+- [Docker Backend](#docker-backend)
+- [Kubernetes Backend](#kubernetes-backend)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
 - [Architecture](#architecture)
@@ -85,18 +87,131 @@ Emergent, decentralized knowledge sharing. Agents explore different angles of a 
 - **Team detail** — individual team page with prompt, logs, and recovery actions
 - **Gossip view** — topology visualization with round-by-round knowledge propagation
 
-### Docker Backend
-Cortex can run agent teams inside Docker containers instead of local processes. Set `backend: docker` in your YAML config and Cortex handles the full container lifecycle:
-
-- Per-team container pairs — a **sidecar** (gRPC bridge to the Cortex gateway) and a **worker** (polls sidecar, runs `claude -p`)
-- Per-run bridge networks — containers are isolated per run, cleaned up on completion
-- Combo image — single `cortex-agent-worker:latest` image with both binaries, optional Claude CLI (`INSTALL_CLAUDE=1`)
-- Env var forwarding — `CLAUDE_MODEL`, `CLAUDE_MAX_TURNS`, `CLAUDE_PERMISSION_MODE`, `ANTHROPIC_API_KEY` passed through to worker containers
-
 ### Infrastructure
 - **Pluggable tool system** — sandboxed execution with timeouts and crash isolation
 - **Persistent event log** — all orchestration events stored in SQLite via Ecto
 - **Liveness checks** — spawner monitors port processes every 2 minutes, catches silent deaths
+
+## Docker Backend
+
+Cortex can run agent teams inside Docker containers instead of local processes. Each team gets a pod-like pair of containers — a **sidecar** (gRPC bridge to the Cortex gateway) and a **worker** (polls sidecar, runs `claude -p`). Set `backend: docker` in your YAML config and Cortex handles the full container lifecycle.
+
+### How it works
+
+1. Cortex creates a per-run bridge network for isolation
+2. For each team, it spawns a sidecar + worker container pair on that network
+3. The sidecar connects back to Cortex via gRPC; the worker polls the sidecar for tasks and runs `claude -p`
+4. Results flow back through the sidecar → gateway → Cortex pipeline
+5. On completion, containers and the bridge network are cleaned up
+
+### Setup
+
+Build the combo image (sidecar + worker in one image):
+
+```bash
+make docker-combo                     # mock mode (no Claude CLI)
+make docker-combo-claude              # with Claude CLI baked in
+```
+
+### Configuration
+
+```yaml
+defaults:
+  backend: docker                     # or set per-team
+```
+
+Environment variables forwarded to worker containers: `CLAUDE_MODEL`, `CLAUDE_MAX_TURNS`, `CLAUDE_PERMISSION_MODE`, `ANTHROPIC_API_KEY`.
+
+### E2E Tests
+
+End-to-end tests run Cortex in a Docker container via compose; the Go test is a pure API client.
+
+```bash
+# Mock agent (no API key needed)
+make e2e-docker-simple                # single-team DAG
+make e2e-docker-multi                 # 3-team multi-tier DAG
+
+# Real Claude (requires ANTHROPIC_API_KEY or ../.key file)
+make e2e-docker-simple-claude         # single-team DAG
+make e2e-docker-multi-claude          # 3-team multi-tier DAG
+```
+
+The Makefile handles `docker compose up/down` around each test run. Cortex gets a Docker socket mount so it can dynamically spawn sidecar + worker containers per team.
+
+## Kubernetes Backend
+
+Cortex can run agent teams as Kubernetes pods. Same sidecar + worker architecture as Docker, but pods are scheduled by K8s with proper RBAC, health probes, resource limits, and label-based lifecycle management. Set `backend: k8s` in your YAML config.
+
+### How it works
+
+1. Cortex creates a Pod per team with two containers — sidecar and worker — sharing localhost networking
+2. The sidecar registers with the Cortex gateway via gRPC; the worker polls the sidecar and runs `claude -p`
+3. Pods are labeled with `cortex.dev/run-id` and `cortex.dev/team` for tracking and batch cleanup
+4. Health probes on the sidecar (`/health`) drive readiness and liveness checks
+5. `activeDeadlineSeconds` (default 1 hour) acts as a safety net against orphaned pods
+6. On completion, pods are deleted; `cleanup_run_pods/2` can batch-delete all pods for a run
+
+### Pod architecture
+
+```
+Pod: cortex-<run-id>-<team-name>
+├── sidecar     (gRPC bridge → Cortex gateway, /health endpoint, port 9091)
+└── worker      (polls sidecar, runs claude -p, ANTHROPIC_API_KEY from K8s Secret)
+```
+
+### RBAC
+
+Cortex needs a ServiceAccount with permissions to create, get, list, delete, and watch pods:
+
+```bash
+kubectl apply -f k8s/rbac.yaml       # creates cortex-agent-spawner SA + cortex-pod-manager Role
+```
+
+### Configuration
+
+```yaml
+defaults:
+  backend: k8s                        # or set per-team
+```
+
+Environment variables for the K8s backend:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `K8S_NAMESPACE` | `default` | Namespace for agent pods |
+| `K8S_GATEWAY_URL` | `cortex-gateway:4001` | gRPC gateway address (from inside the cluster) |
+| `K8S_SIDECAR_IMAGE` | `cortex-agent-worker:latest` | Sidecar container image |
+| `K8S_WORKER_IMAGE` | `cortex-agent-worker:latest` | Worker container image |
+| `K8S_IMAGE_PULL_POLICY` | — | `Always`, `IfNotPresent`, or `Never` |
+
+Worker containers receive `CLAUDE_MODEL`, `CLAUDE_MAX_TURNS`, `CLAUDE_PERMISSION_MODE` from team config. `ANTHROPIC_API_KEY` is injected from a K8s Secret (`anthropic-api-key`).
+
+### E2E Tests
+
+End-to-end tests use a local [kind](https://kind.sigs.k8s.io/) cluster. Cortex runs as a deployment inside the cluster and dynamically spawns agent pods per team.
+
+```bash
+# Mock agent (no API key needed)
+make e2e-k8s-simple                   # single-team DAG
+make e2e-k8s-multi                    # 3-team multi-tier DAG
+
+# Real Claude (requires ANTHROPIC_API_KEY or ../.key file)
+make e2e-k8s-simple-claude            # single-team DAG
+make e2e-k8s-multi-claude             # 3-team multi-tier DAG
+
+# Teardown
+make e2e-k8s-teardown                 # delete the kind cluster
+```
+
+The Makefile manages the full lifecycle: kind cluster creation, image loading, deployment, and port-forwarding. The real-Claude targets patch the `anthropic-api-key` secret with your real key and set `CLAUDE_COMMAND=claude` on the Cortex deployment at runtime — no manifest changes needed.
+
+Watch agent pods during a test run:
+
+```bash
+kubectl --context kind-cortex-e2e get pods -w
+```
+
+You'll see Cortex roll out, then agent pods (e.g., `cortex-<run-id>-researcher`, `cortex-<run-id>-analyst`) spin up as the DAG executes.
 
 ## Quick Start
 
@@ -337,22 +452,6 @@ mix format                            # format code
 mix compile --warnings-as-errors      # compile check
 mix credo --strict                    # lint
 ```
-
-### Docker E2E Tests
-
-End-to-end tests for the Docker spawn backend. Cortex runs in a Docker container via compose; the Go test is a pure API client.
-
-```bash
-# Mock agent (no API key needed)
-make e2e-docker-simple                # single-team DAG
-make e2e-docker-multi                 # 3-team multi-tier DAG
-
-# Real Claude (requires ANTHROPIC_API_KEY or ../.key file)
-make e2e-docker-simple-claude         # single-team DAG
-make e2e-docker-multi-claude          # 3-team multi-tier DAG
-```
-
-The Makefile handles `docker compose up/down` around each test run. Cortex gets a Docker socket mount so `docker.ex` can dynamically spawn sidecar + worker containers per team.
 
 ### Benchmarks
 

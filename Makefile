@@ -1,4 +1,4 @@
-.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-elixir-all e2e-local e2e-docker-simple e2e-docker-multi e2e-docker-simple-claude e2e-docker-multi-claude docker-integration e2e-shell e2e-elixir sidecar-build worker-build sidecar-test sidecar-lint sidecar-check docker-combo docker-combo-claude e2e-k8s-setup e2e-k8s-simple e2e-k8s-multi e2e-k8s-teardown
+.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-elixir-all e2e-local e2e-docker-simple e2e-docker-multi e2e-docker-simple-claude e2e-docker-multi-claude docker-integration e2e-shell e2e-elixir sidecar-build worker-build sidecar-test sidecar-lint sidecar-check docker-combo docker-combo-claude e2e-k8s-setup e2e-k8s-setup-claude e2e-k8s-simple e2e-k8s-multi e2e-k8s-simple-claude e2e-k8s-multi-claude e2e-k8s-teardown
 
 # -- Development --
 
@@ -232,6 +232,40 @@ e2e-k8s-simple: e2e-k8s-setup ## K8s: single-team DAG (mock agent)
 	EXIT=$$?; kill %1 2>/dev/null; exit $$EXIT
 
 e2e-k8s-multi: e2e-k8s-setup ## K8s: 3-team multi-tier DAG (mock agent)
+	kubectl --context kind-$(K8S_CLUSTER) port-forward svc/cortex 4000:4000 4001:4001 &
+	sleep 2
+	cd e2e && go test -v -run TestK8sDAGMultiTeam -timeout 300s; \
+	EXIT=$$?; kill %1 2>/dev/null; exit $$EXIT
+
+e2e-k8s-setup-claude: ## Create kind cluster + load Claude images + deploy Cortex
+	kind create cluster --name $(K8S_CLUSTER) 2>/dev/null || true
+	docker build -t cortex:latest .
+	cd sidecar && docker build -t cortex-agent-worker:latest -f Dockerfile.combo --build-arg INSTALL_CLAUDE=1 .
+	kind load docker-image cortex:latest --name $(K8S_CLUSTER)
+	kind load docker-image cortex-agent-worker:latest --name $(K8S_CLUSTER)
+	kubectl --context kind-$(K8S_CLUSTER) apply -f e2e/k8s/rbac.yaml
+	kubectl --context kind-$(K8S_CLUSTER) apply -f e2e/k8s/secrets.yaml
+	kubectl --context kind-$(K8S_CLUSTER) apply -f e2e/k8s/cortex-deployment.yaml
+	kubectl --context kind-$(K8S_CLUSTER) apply -f e2e/k8s/cortex-service.yaml
+	kubectl --context kind-$(K8S_CLUSTER) rollout status deployment/cortex --timeout=120s
+
+e2e-k8s-simple-claude: e2e-k8s-setup-claude ## K8s: single-team DAG, real Claude
+	kubectl --context kind-$(K8S_CLUSTER) create secret generic anthropic-api-key \
+		--from-literal=key=$$(cat ../.key 2>/dev/null || echo $$ANTHROPIC_API_KEY) \
+		--dry-run=client -o yaml | kubectl --context kind-$(K8S_CLUSTER) apply -f -
+	kubectl --context kind-$(K8S_CLUSTER) set env deployment/cortex CLAUDE_COMMAND=claude
+	kubectl --context kind-$(K8S_CLUSTER) rollout status deployment/cortex --timeout=60s
+	kubectl --context kind-$(K8S_CLUSTER) port-forward svc/cortex 4000:4000 4001:4001 &
+	sleep 2
+	cd e2e && go test -v -run TestK8sDAGSimple -timeout 300s; \
+	EXIT=$$?; kill %1 2>/dev/null; exit $$EXIT
+
+e2e-k8s-multi-claude: e2e-k8s-setup-claude ## K8s: 3-team DAG, real Claude
+	kubectl --context kind-$(K8S_CLUSTER) create secret generic anthropic-api-key \
+		--from-literal=key=$$(cat ../.key 2>/dev/null || echo $$ANTHROPIC_API_KEY) \
+		--dry-run=client -o yaml | kubectl --context kind-$(K8S_CLUSTER) apply -f -
+	kubectl --context kind-$(K8S_CLUSTER) set env deployment/cortex CLAUDE_COMMAND=claude
+	kubectl --context kind-$(K8S_CLUSTER) rollout status deployment/cortex --timeout=60s
 	kubectl --context kind-$(K8S_CLUSTER) port-forward svc/cortex 4000:4000 4001:4001 &
 	sleep 2
 	cd e2e && go test -v -run TestK8sDAGMultiTeam -timeout 300s; \

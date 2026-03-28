@@ -204,12 +204,12 @@ defmodule Cortex.SpawnBackend.K8s.PodSpec do
       "ports" => [%{"containerPort" => @default_sidecar_port}],
       "resources" => sidecar_resources,
       "readinessProbe" => %{
-        "httpGet" => %{"path" => "/healthz", "port" => @default_sidecar_port},
+        "httpGet" => %{"path" => "/health", "port" => @default_sidecar_port},
         "initialDelaySeconds" => 2,
         "periodSeconds" => 3
       },
       "livenessProbe" => %{
-        "httpGet" => %{"path" => "/healthz", "port" => @default_sidecar_port},
+        "httpGet" => %{"path" => "/health", "port" => @default_sidecar_port},
         "initialDelaySeconds" => 10,
         "periodSeconds" => 10
       }
