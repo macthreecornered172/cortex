@@ -152,6 +152,12 @@ sidecar-test: ## Go: sidecar unit tests
 docker-integration: ## Docker API lifecycle: container CRUD, networks, labels, logs
 	cd e2e && go test -v -run "^TestDocker[^D]" -timeout 120s
 
+e2e-cli: ## CLI provider: single-team DAG (real Claude, no sidecar/containers)
+	cd e2e && go test -v -run TestCLIDAGSimple -timeout 300s
+
+e2e-cli-multi: ## CLI provider: 5-team 3-tier DAG (real Claude)
+	cd e2e && go test -v -run TestCLIDAGMultiTeam -timeout 600s
+
 e2e-elixir: ## Elixir-side ExternalAgent pipeline (mock sidecar, no containers)
 	mix test test/e2e/ --include e2e
 
