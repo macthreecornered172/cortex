@@ -7,6 +7,8 @@ defmodule Cortex.Orchestration.Runner.Store do
   `truncate_summary/1` to cap text before DB insertion.
   """
 
+  require Logger
+
   @doc """
   Wraps a database call in try/rescue so that store failures never crash
   the orchestration coordinator.
@@ -17,7 +19,9 @@ defmodule Cortex.Orchestration.Runner.Store do
   def safe_call(fun) do
     fun.()
   rescue
-    _ -> :ok
+    e ->
+      Logger.warning("Runner.Store.safe_call rescued: #{Exception.message(e)}")
+      :ok
   end
 
   @doc """

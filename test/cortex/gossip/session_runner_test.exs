@@ -33,7 +33,7 @@ defmodule Cortex.Gossip.SessionRunnerTest do
     """)
   end
 
-  defp simple_config(agents, opts \\ []) do
+  defp simple_config(agents, opts) do
     %GossipConfig{
       name: Keyword.get(opts, :name, "test-gossip"),
       defaults: %Defaults{

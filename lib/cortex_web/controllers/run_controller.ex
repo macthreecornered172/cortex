@@ -11,6 +11,8 @@ defmodule CortexWeb.RunController do
 
   action_fallback(CortexWeb.FallbackController)
 
+  alias Cortex.Orchestration.Config.Loader
+  alias Cortex.Orchestration.DAG
   alias Cortex.Store
   alias Cortex.Store.Schemas.Run
 
@@ -64,6 +66,49 @@ defmodule CortexWeb.RunController do
     end
   end
 
+  @doc """
+  Validate a config YAML without starting a run.
+
+  Parses the YAML, validates the config, and builds the DAG. Returns
+  the validated config summary on success or validation errors on failure.
+  """
+  @spec validate(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def validate(conn, %{"config_yaml" => yaml}) when is_binary(yaml) and yaml != "" do
+    tmp_path =
+      Path.join(System.tmp_dir!(), "cortex-validate-#{:erlang.unique_integer([:positive])}.yaml")
+
+    try do
+      File.write!(tmp_path, yaml)
+
+      with {:ok, config, warnings} <- Loader.load(tmp_path),
+           {:ok, tiers} <- DAG.build_tiers(config.teams) do
+        team_names = Enum.map(config.teams, & &1.name)
+
+        json(conn, %{
+          valid: true,
+          project: config.name,
+          teams: team_names,
+          team_count: length(team_names),
+          tiers: Enum.map(tiers, &Enum.sort/1),
+          warnings: warnings
+        })
+      else
+        {:error, reason} ->
+          conn
+          |> put_status(:unprocessable_entity)
+          |> json(%{valid: false, error: inspect(reason)})
+      end
+    after
+      File.rm(tmp_path)
+    end
+  end
+
+  def validate(conn, _params) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> json(%{valid: false, error: "config_yaml is required"})
+  end
+
   # ── Private ──────────────────────────────────────────────────────────
 
   alias Cortex.Orchestration.Runner
@@ -94,8 +139,10 @@ defmodule CortexWeb.RunController do
             Store.update_run(run, %{status: "failed", completed_at: DateTime.utc_now()})
             Logger.warning("Run #{run.id} failed: #{inspect(reason)}")
         end
-      after
-        File.rm_rf!(tmp_dir)
+      rescue
+        e ->
+          Logger.error("Run #{run.id} crashed: #{Exception.message(e)}")
+          Store.update_run(run, %{status: "failed", completed_at: DateTime.utc_now()})
       end
     end)
   end

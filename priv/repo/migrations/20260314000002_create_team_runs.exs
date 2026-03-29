@@ -10,12 +10,18 @@ defmodule Cortex.Repo.Migrations.CreateTeamRuns do
       add :status, :string, null: false, default: "pending"
       add :tier, :integer
       add :cost_usd, :float, default: 0.0
+      add :input_tokens, :integer
+      add :output_tokens, :integer
+      add :cache_read_tokens, :integer
+      add :cache_creation_tokens, :integer
       add :duration_ms, :integer
       add :num_turns, :integer
       add :session_id, :string
       add :result_summary, :text
       add :prompt, :text
       add :log_path, :string
+      add :output_key, :string
+      add :internal, :boolean, default: false, null: false
       add :started_at, :utc_datetime_usec
       add :completed_at, :utc_datetime_usec
 

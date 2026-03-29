@@ -102,7 +102,7 @@ defmodule CortexWeb.RunDetailLive do
         team_names = Enum.map(external_runs, & &1.team_name)
 
         coordinator_alive =
-          Runner.coordinator_alive?(run.id)
+          Runner.runner_alive?(run.id)
 
         {:ok,
          assign(socket,
@@ -197,7 +197,7 @@ defmodule CortexWeb.RunDetailLive do
         {tiers, edges} = build_dag(updated_run || run, external_runs)
 
         coordinator_alive =
-          Runner.coordinator_alive?(run.id)
+          Runner.runner_alive?(run.id)
 
         # Auto-generate summary on completion events (with full diagnostics)
         completion_events = [

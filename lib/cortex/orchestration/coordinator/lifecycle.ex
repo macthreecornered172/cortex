@@ -20,7 +20,8 @@ defmodule Cortex.Orchestration.Coordinator.Lifecycle do
   Spawns the coordinator agent as an async Task.
 
   Builds the coordinator prompt, sets up a `%SpawnConfig{}`, and
-  delegates to `Launcher.run_async/1`.
+  delegates to `Launcher.run/1` inside a `Task.async` that first
+  registers the coordinator in the `RunnerRegistry`.
 
   ## Parameters
 
@@ -81,7 +82,22 @@ defmodule Cortex.Orchestration.Coordinator.Lifecycle do
       on_port_opened: fn _name, _pid -> :ok end
     }
 
-    Launcher.run_async(spawn_config)
+    # Register in the RunnerRegistry before running so the UI can track us
+    Task.async(fn ->
+      if run_id do
+        Registry.register(
+          Cortex.Orchestration.RunnerRegistry,
+          {:coordinator, run_id},
+          %{started_at: DateTime.utc_now()}
+        )
+      end
+
+      Launcher.run(spawn_config)
+    end)
+  rescue
+    e ->
+      Logger.warning("Failed to spawn orchestration coordinator: #{inspect(e)}")
+      nil
   end
 
   @doc """

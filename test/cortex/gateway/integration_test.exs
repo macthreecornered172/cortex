@@ -67,7 +67,7 @@ defmodule Cortex.Gateway.IntegrationTest do
     agent_id
   end
 
-  defp connect_and_register(name \\ "test-agent", capabilities \\ ["testing"]) do
+  defp connect_and_register(name, capabilities) do
     {:ok, socket} = connect_socket()
     {:ok, _, socket} = join_lobby(socket)
     agent_id = register_agent(socket, name, capabilities)

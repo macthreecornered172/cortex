@@ -6,6 +6,8 @@ config :cortex,
 config :cortex, Cortex.Repo,
   database: Path.expand("../cortex_#{config_env()}.db", __DIR__),
   pool_size: 5,
+  journal_mode: :wal,
+  busy_timeout: 5_000,
   show_sensitive_data_on_connection_error: true
 
 config :cortex, CortexWeb.Endpoint,

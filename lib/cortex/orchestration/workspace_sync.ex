@@ -121,7 +121,10 @@ defmodule Cortex.Orchestration.WorkspaceSync do
 
   @impl true
   def handle_call(:final_sync, _from, state) do
-    new_state = do_sync(state)
+    # Clear mtime cache to force a full re-upload. Periodic ticks may
+    # have cached an mtime for a file (e.g. state.json) that was since
+    # rewritten within the same second — same mtime, different content.
+    new_state = do_sync(%{state | mtimes: %{}})
     write_manifest(new_state)
     {:reply, :ok, new_state}
   end

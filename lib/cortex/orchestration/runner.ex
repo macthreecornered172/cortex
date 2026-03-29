@@ -119,6 +119,23 @@ defmodule Cortex.Orchestration.Runner do
   end
 
   @doc """
+  Checks whether the Runner executor process is alive for a given run.
+
+  The executor is the process that actually walks DAG tiers and spawns teams.
+  This is the authoritative check for whether a run is still in progress —
+  the coordinator is optional monitoring and may exit independently.
+  """
+  @spec runner_alive?(String.t()) :: boolean()
+  def runner_alive?(run_id) do
+    case Registry.lookup(Cortex.Orchestration.RunnerRegistry, {:runner, run_id}) do
+      [{pid, _value}] -> Process.alive?(pid)
+      [] -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  @doc """
   Sends a message to a running team's file-based inbox.
 
   Delivers a message to the team's inbox file so that the team's

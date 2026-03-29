@@ -24,7 +24,7 @@ defmodule Cortex.Gateway.GrpcIntegrationTest do
 
   use ExUnit.Case, async: false
 
-  alias Cortex.Gateway.{Events, Registry}
+  alias Cortex.Gateway.Registry
   alias Cortex.GrpcHelpers
 
   @valid_token "grpc-integration-test-token"
