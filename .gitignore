@@ -32,6 +32,7 @@ cortex-*.tar
 
 # Cortex runtime state (logs, results, registry, messages)
 .cortex/
+priv/outputs/
 
 # Editor and IDE files
 .elixir_ls/
@@ -53,3 +54,4 @@ sidecar/bin/
 *.pem
 *.secret
 sidecar/agent-worker
+sidecar/cortex-sidecar
