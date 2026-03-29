@@ -145,9 +145,9 @@ defmodule Cortex.Orchestration.Runner.Executor do
     - `{:error, {:tier_failed, tier_index, failures}}` on failure
 
   """
-  @spec execute_continuation(map(), Config.t(), [[String.t()]], String.t(), boolean()) ::
+  @spec execute_continuation(map(), Config.t(), [[String.t()]], String.t(), boolean(), boolean()) ::
           {:ok, map()} | {:error, term()}
-  def execute_continuation(run, config, all_tiers, command, continue_on_error) do
+  def execute_continuation(run, config, all_tiers, command, continue_on_error, coordinator) do
     run_id = run.id
     workspace_path = run.workspace_path
 
@@ -175,13 +175,19 @@ defmodule Cortex.Orchestration.Runner.Executor do
       workspace = %Workspace{path: Path.join(workspace_path, ".cortex")}
       team_names = Enum.map(config.teams, & &1.name)
 
-      InboxBridge.setup(workspace_path, [CoordConfig.name()])
+      watcher_names =
+        if coordinator do
+          InboxBridge.setup(workspace_path, [CoordConfig.name()])
+          team_names ++ [CoordConfig.name()]
+        else
+          team_names
+        end
 
       _watcher_pid =
         safe_start_watcher(
           workspace_path: workspace_path,
           run_id: run_id,
-          team_names: team_names ++ [CoordConfig.name()]
+          team_names: watcher_names
         )
 
       sync_pid = safe_start_workspace_sync(run_id, workspace_path)
@@ -190,7 +196,9 @@ defmodule Cortex.Orchestration.Runner.Executor do
       Tel.emit_run_started(%{project: config.name, teams: team_names})
 
       coordinator_task =
-        CoordLifecycle.spawn(config, all_tiers, workspace, command, run_id, &broadcast/2)
+        if coordinator do
+          CoordLifecycle.spawn(config, all_tiers, workspace, command, run_id, &broadcast/2)
+        end
 
       run_start = System.monotonic_time(:millisecond)
 

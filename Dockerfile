@@ -43,7 +43,7 @@ RUN useradd --create-home --shell /bin/bash cortex
 
 WORKDIR /app
 
-RUN mkdir -p /app/data && chown cortex:cortex /app/data
+RUN mkdir -p /app/data /app/priv/outputs && chown -R cortex:cortex /app/data /app/priv/outputs
 
 COPY --from=build --chown=cortex:cortex /app/_build/prod/rel/cortex ./
 

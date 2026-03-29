@@ -84,6 +84,10 @@ teams:
 	}
 
 	t.Logf("Run final status: %s", finalStatus)
+	if finalStatus != "completed" {
+		dumpContainerState(t, d)
+		t.Errorf("Expected 'completed', got '%s'", finalStatus)
+	}
 	assertContainersCleanedUp(t, d)
 }
 
@@ -218,6 +222,10 @@ teams:
 	}
 
 	t.Logf("5-team DAG final status: %s", finalStatus)
+	if finalStatus != "completed" {
+		dumpContainerState(t, d)
+		t.Errorf("Expected 'completed', got '%s'", finalStatus)
+	}
 	assertContainersCleanedUp(t, d)
 }
 

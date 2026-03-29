@@ -76,6 +76,10 @@ teams:
 	}
 
 	t.Logf("Run final status: %s", finalStatus)
+	if finalStatus != "completed" {
+		dumpK8sPodState(t, kc)
+		t.Errorf("Expected 'completed', got '%s'", finalStatus)
+	}
 	assertK8sPodsCleanedUp(t, kc)
 }
 
@@ -212,5 +216,9 @@ teams:
 	}
 
 	t.Logf("5-team DAG final status: %s", finalStatus)
+	if finalStatus != "completed" {
+		dumpK8sPodState(t, kc)
+		t.Errorf("Expected 'completed', got '%s'", finalStatus)
+	}
 	assertK8sPodsCleanedUp(t, kc)
 }

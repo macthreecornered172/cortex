@@ -101,8 +101,8 @@ defmodule CortexWeb.RunDetailLive do
         team_members = extract_team_members(run)
         team_names = Enum.map(external_runs, & &1.team_name)
 
-        coordinator_alive =
-          Runner.runner_alive?(run.id)
+        coordinator_alive = Runner.coordinator_alive?(run.id)
+        runner_alive = Runner.runner_alive?(run.id)
 
         {:ok,
          assign(socket,
@@ -134,6 +134,7 @@ defmodule CortexWeb.RunDetailLive do
            debug_reports: read_debug_reports(run),
            selected_debug_report: nil,
            coordinator_alive: coordinator_alive,
+           runner_alive: runner_alive,
            coordinator_expanded: false,
            coordinator_log: nil,
            coordinator_inbox: [],
@@ -196,8 +197,8 @@ defmodule CortexWeb.RunDetailLive do
         external_runs = Enum.reject(team_runs, & &1.internal)
         {tiers, edges} = build_dag(updated_run || run, external_runs)
 
-        coordinator_alive =
-          Runner.runner_alive?(run.id)
+        coordinator_alive = Runner.coordinator_alive?(run.id)
+        runner_alive = Runner.runner_alive?(run.id)
 
         # Auto-generate summary on completion events (with full diagnostics)
         completion_events = [
@@ -232,6 +233,7 @@ defmodule CortexWeb.RunDetailLive do
            tiers: tiers,
            edges: edges,
            coordinator_alive: coordinator_alive,
+           runner_alive: runner_alive,
            coordinator_summaries: summaries,
            run_summary: run_summary
          )}
@@ -1135,6 +1137,7 @@ defmodule CortexWeb.RunDetailLive do
          tiers: tiers,
          edges: edges,
          coordinator_alive: false,
+         runner_alive: false,
          pid_status: %{},
          activities: prepend_activity(socket.assigns.activities, entry)
        )
@@ -1532,7 +1535,7 @@ defmodule CortexWeb.RunDetailLive do
 
       <%!-- Continue Run Banner --%>
       <% incomplete = incomplete_team_names(@run, @team_runs) %>
-      <%= if incomplete != [] and @run.status in ["running", "failed"] and not @coordinator_alive do %>
+      <%= if incomplete != [] and @run.status in ["running", "failed"] and not @runner_alive do %>
         <div class="bg-blue-900/30 border border-blue-800 rounded-lg p-4 mb-6">
           <div class="flex items-center justify-between">
             <div>

@@ -206,12 +206,22 @@ defmodule Cortex.Orchestration.Runner do
     command = Keyword.get(opts, :command, "claude")
     continue_on_error = Keyword.get(opts, :continue_on_error, true)
 
+    coordinator = Keyword.get(opts, :coordinator, nil)
+
     with {:ok, run} <- fetch_run(run_id),
          {:ok, _yaml} <- validate_run_config(run),
          {:ok, _path} <- validate_run_workspace(run),
          {:ok, config, _warnings} <- load_run_config(run),
          {:ok, all_tiers} <- DAG.build_tiers(config.teams) do
-      Executor.execute_continuation(run, config, all_tiers, command, continue_on_error)
+      # If coordinator not explicitly set, infer from provider
+      spawn_coordinator =
+        if is_nil(coordinator),
+          do: config.defaults.provider != :external,
+          else: coordinator
+
+      Executor.execute_continuation(
+        run, config, all_tiers, command, continue_on_error, spawn_coordinator
+      )
     end
   end
 
