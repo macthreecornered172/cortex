@@ -250,7 +250,7 @@ defmodule Cortex.SpawnBackend.LocalTest do
 
       events = Enum.to_list(stream)
       data_events = Enum.filter(events, fn {tag, _} -> tag == :data end)
-      assert length(data_events) >= 1
+      assert data_events != []
     end
   end
 

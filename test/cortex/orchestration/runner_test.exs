@@ -171,7 +171,7 @@ defmodule Cortex.Orchestration.RunnerTest do
         log_dir = Path.join([tmp_dir, ".cortex", "logs"])
         flat = Path.join(log_dir, "backend.log")
         nested = Path.wildcard(Path.join([log_dir, "*", "backend.log"]))
-        assert File.exists?(flat) or length(nested) >= 1
+        assert File.exists?(flat) or nested != []
       after
         cleanup(tmp_dir)
       end

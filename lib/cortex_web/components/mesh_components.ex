@@ -503,159 +503,17 @@ defmodule CortexWeb.MeshComponents do
       ~H""
     else
       colors = Map.get(@themes, assigns.theme, @themes["cyan"])
-      cx = 250
-      cy = 250
-      r = if(count <= 4, do: 140, else: 180)
+      positions = compute_positions(assigns.agents, count)
+      flow_map = build_flow_map(assigns.message_flows.flows)
+      max_count = compute_max_count(assigns.message_flows.flows)
 
-      positions =
-        assigns.agents
-        |> Enum.with_index()
-        |> Enum.map(fn {agent, idx} ->
-          angle = 2 * :math.pi() * idx / count - :math.pi() / 2
-          x = cx + r * :math.cos(angle)
-          y = cy + r * :math.sin(angle)
-          {agent.name, {round(x), round(y)}}
-        end)
-        |> Map.new()
-
-      # Build flow lookup: {from, to} => count
-      flow_map =
-        assigns.message_flows.flows
-        |> Enum.map(fn f -> {{f.from, f.to}, f.count} end)
-        |> Map.new()
-
-      max_count =
-        case assigns.message_flows.flows do
-          [top | _] -> max(top.count, 1)
-          [] -> 1
-        end
-
-      # Build directed edges with animation data
       agent_names = Enum.map(assigns.agents, & &1.name)
-
-      pairs =
-        for a <- agent_names, b <- agent_names, a < b, do: {a, b}
-
-      edges =
-        Enum.flat_map(pairs, fn {a, b} ->
-          ab = Map.get(flow_map, {a, b}, 0)
-          ba = Map.get(flow_map, {b, a}, 0)
-          {ax, ay} = Map.get(positions, a, {0, 0})
-          {bx, by} = Map.get(positions, b, {0, 0})
-
-          cond do
-            ab > 0 and ba > 0 ->
-              # Bidirectional: offset two lines perpendicular to the edge
-              {ox, oy} = perp_offset(ax, ay, bx, by, 4)
-
-              [
-                %{
-                  x1: ax + ox,
-                  y1: ay + oy,
-                  x2: bx + ox,
-                  y2: by + oy,
-                  count: ab,
-                  max: max_count,
-                  direction: :forward,
-                  id: "#{a}-#{b}",
-                  from: a,
-                  to: b
-                },
-                %{
-                  x1: bx - ox,
-                  y1: by - oy,
-                  x2: ax - ox,
-                  y2: ay - oy,
-                  count: ba,
-                  max: max_count,
-                  direction: :forward,
-                  id: "#{b}-#{a}",
-                  from: b,
-                  to: a
-                }
-              ]
-
-            ab > 0 ->
-              [
-                %{
-                  x1: ax,
-                  y1: ay,
-                  x2: bx,
-                  y2: by,
-                  count: ab,
-                  max: max_count,
-                  direction: :forward,
-                  id: "#{a}-#{b}",
-                  from: a,
-                  to: b
-                }
-              ]
-
-            ba > 0 ->
-              [
-                %{
-                  x1: bx,
-                  y1: by,
-                  x2: ax,
-                  y2: ay,
-                  count: ba,
-                  max: max_count,
-                  direction: :forward,
-                  id: "#{b}-#{a}",
-                  from: b,
-                  to: a
-                }
-              ]
-
-            true ->
-              # No messages — background edge
-              [
-                %{
-                  x1: ax,
-                  y1: ay,
-                  x2: bx,
-                  y2: by,
-                  count: 0,
-                  max: max_count,
-                  direction: :none,
-                  id: "bg-#{a}-#{b}",
-                  from: a,
-                  to: b
-                }
-              ]
-          end
-        end)
+      pairs = for a <- agent_names, b <- agent_names, a < b, do: {a, b}
+      edges = build_edges(pairs, flow_map, positions, max_count)
 
       selected = assigns.selected_node
-
-      nodes =
-        Enum.map(assigns.agents, fn agent ->
-          {x, y} = Map.get(positions, agent.name, {0, 0})
-
-          agent_stats =
-            Map.get(assigns.message_flows.by_agent, agent.name, %{sent: 0, received: 0})
-
-          total = agent_stats.sent + agent_stats.received
-
-          %{
-            name: agent.name,
-            x: x,
-            y: y,
-            status: agent.status,
-            total: total,
-            selected: agent.name == selected,
-            role: Map.get(agent, :role)
-          }
-        end)
-
-      # Flows involving selected node
-      selected_flows =
-        if selected do
-          assigns.message_flows.flows
-          |> Enum.filter(fn f -> f.from == selected or f.to == selected end)
-        else
-          []
-        end
+      nodes = build_nodes(assigns.agents, positions, assigns.message_flows.by_agent, selected)
+      selected_flows = flows_for_node(assigns.message_flows.flows, selected)
 
       selected_agent =
         if selected, do: Enum.find(assigns.agents, &(&1.name == selected))
@@ -896,11 +754,157 @@ defmodule CortexWeb.MeshComponents do
   defp abbrev(name) do
     len = String.length(name)
 
-    cond do
-      len <= 10 -> name
-      # Try to keep first word + abbreviate rest: "app-logs-analyst" -> "app-logs-a.."
-      true -> String.slice(name, 0, 9) <> ".."
+    if len <= 10 do
+      name
+    else
+      String.slice(name, 0, 9) <> ".."
     end
+  end
+
+  defp compute_positions(agents, count) do
+    cx = 250
+    cy = 250
+    r = if(count <= 4, do: 140, else: 180)
+
+    agents
+    |> Enum.with_index()
+    |> Enum.map(fn {agent, idx} ->
+      angle = 2 * :math.pi() * idx / count - :math.pi() / 2
+      x = cx + r * :math.cos(angle)
+      y = cy + r * :math.sin(angle)
+      {agent.name, {round(x), round(y)}}
+    end)
+    |> Map.new()
+  end
+
+  defp build_flow_map(flows) do
+    flows
+    |> Enum.map(fn f -> {{f.from, f.to}, f.count} end)
+    |> Map.new()
+  end
+
+  defp compute_max_count(flows) do
+    case flows do
+      [top | _] -> max(top.count, 1)
+      [] -> 1
+    end
+  end
+
+  defp build_edges(pairs, flow_map, positions, max_count) do
+    Enum.flat_map(pairs, fn {a, b} ->
+      ab = Map.get(flow_map, {a, b}, 0)
+      ba = Map.get(flow_map, {b, a}, 0)
+      pos_a = Map.get(positions, a, {0, 0})
+      pos_b = Map.get(positions, b, {0, 0})
+
+      build_pair_edges(a, b, ab, ba, pos_a, pos_b, max_count)
+    end)
+  end
+
+  defp build_pair_edges(a, b, ab, ba, {ax, ay}, {bx, by}, max_count) when ab > 0 and ba > 0 do
+    {ox, oy} = perp_offset(ax, ay, bx, by, 4)
+
+    [
+      %{
+        x1: ax + ox,
+        y1: ay + oy,
+        x2: bx + ox,
+        y2: by + oy,
+        count: ab,
+        max: max_count,
+        direction: :forward,
+        id: "#{a}-#{b}",
+        from: a,
+        to: b
+      },
+      %{
+        x1: bx - ox,
+        y1: by - oy,
+        x2: ax - ox,
+        y2: ay - oy,
+        count: ba,
+        max: max_count,
+        direction: :forward,
+        id: "#{b}-#{a}",
+        from: b,
+        to: a
+      }
+    ]
+  end
+
+  defp build_pair_edges(a, b, ab, _ba, {ax, ay}, {bx, by}, max_count) when ab > 0 do
+    [
+      %{
+        x1: ax,
+        y1: ay,
+        x2: bx,
+        y2: by,
+        count: ab,
+        max: max_count,
+        direction: :forward,
+        id: "#{a}-#{b}",
+        from: a,
+        to: b
+      }
+    ]
+  end
+
+  defp build_pair_edges(a, b, _ab, ba, {ax, ay}, {bx, by}, max_count) when ba > 0 do
+    [
+      %{
+        x1: bx,
+        y1: by,
+        x2: ax,
+        y2: ay,
+        count: ba,
+        max: max_count,
+        direction: :forward,
+        id: "#{b}-#{a}",
+        from: b,
+        to: a
+      }
+    ]
+  end
+
+  defp build_pair_edges(a, b, _ab, _ba, {ax, ay}, {bx, by}, max_count) do
+    [
+      %{
+        x1: ax,
+        y1: ay,
+        x2: bx,
+        y2: by,
+        count: 0,
+        max: max_count,
+        direction: :none,
+        id: "bg-#{a}-#{b}",
+        from: a,
+        to: b
+      }
+    ]
+  end
+
+  defp build_nodes(agents, positions, by_agent, selected) do
+    Enum.map(agents, fn agent ->
+      {x, y} = Map.get(positions, agent.name, {0, 0})
+      agent_stats = Map.get(by_agent, agent.name, %{sent: 0, received: 0})
+      total = agent_stats.sent + agent_stats.received
+
+      %{
+        name: agent.name,
+        x: x,
+        y: y,
+        status: agent.status,
+        total: total,
+        selected: agent.name == selected,
+        role: Map.get(agent, :role)
+      }
+    end)
+  end
+
+  defp flows_for_node(_flows, nil), do: []
+
+  defp flows_for_node(flows, selected) do
+    Enum.filter(flows, fn f -> f.from == selected or f.to == selected end)
   end
 
   # -- Private helpers --

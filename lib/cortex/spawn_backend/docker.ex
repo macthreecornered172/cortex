@@ -33,8 +33,8 @@ defmodule Cortex.SpawnBackend.Docker do
 
   @behaviour Cortex.SpawnBackend
 
-  alias Cortex.SpawnBackend.Docker.{Client, Handle}
   alias Cortex.Gateway.Registry, as: GatewayRegistry
+  alias Cortex.SpawnBackend.Docker.{Client, Handle}
 
   require Logger
 

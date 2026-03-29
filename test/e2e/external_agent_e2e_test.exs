@@ -19,6 +19,7 @@ defmodule Cortex.E2E.ExternalAgentTest do
 
   alias Cortex.Agent.{ExternalAgent, ExternalSupervisor}
   alias Cortex.Gateway.Registry, as: GatewayRegistry
+  alias Cortex.Orchestration.Runner
 
   require Logger
 
@@ -132,7 +133,7 @@ defmodule Cortex.E2E.ExternalAgentTest do
       yaml_path = Path.join(tmp_dir, "orchestra.yaml")
       File.write!(yaml_path, yaml_content)
 
-      assert {:ok, summary} = Cortex.Orchestration.Runner.run(yaml_path, workspace_path: tmp_dir)
+      assert {:ok, summary} = Runner.run(yaml_path, workspace_path: tmp_dir)
       assert summary.status == :complete
       assert summary.teams[@agent_name].status == "done"
 

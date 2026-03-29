@@ -7,9 +7,11 @@ defmodule Cortex.Gateway.GrpcServerTest do
   """
   use ExUnit.Case, async: false
 
+  alias Cortex.Gateway.Events
+
   alias Cortex.Gateway.Proto.{
-    AgentMessage,
     AgentGateway.Stub,
+    AgentMessage,
     GatewayMessage,
     Heartbeat,
     PeerResponse,
@@ -221,7 +223,7 @@ defmodule Cortex.Gateway.GrpcServerTest do
 
   describe "task result" do
     test "emits event for task result", %{channel: channel} do
-      Cortex.Gateway.Events.subscribe()
+      Events.subscribe()
 
       stream = Stub.connect(channel)
       register_msg = build_register("task-agent", "role", ["cap"])
@@ -254,7 +256,7 @@ defmodule Cortex.Gateway.GrpcServerTest do
 
   describe "peer response" do
     test "emits event for peer response", %{channel: channel} do
-      Cortex.Gateway.Events.subscribe()
+      Events.subscribe()
 
       stream = Stub.connect(channel)
       register_msg = build_register("peer-agent", "role", ["cap"])

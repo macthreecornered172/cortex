@@ -38,8 +38,8 @@ defmodule Cortex.SpawnBackend.K8s do
 
   @behaviour Cortex.SpawnBackend
 
-  alias Cortex.SpawnBackend.K8s.{Connection, PodSpec}
   alias Cortex.Gateway.Registry, as: GatewayRegistry
+  alias Cortex.SpawnBackend.K8s.{Connection, PodSpec}
 
   require Logger
 

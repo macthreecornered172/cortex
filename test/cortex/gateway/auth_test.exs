@@ -2,6 +2,7 @@ defmodule Cortex.Gateway.AuthTest do
   use ExUnit.Case, async: true
 
   alias Cortex.Gateway.Auth
+  alias Cortex.Gateway.Auth.Bearer
 
   describe "authenticate/2 with token_source option" do
     test "valid token returns {:ok, identity}" do
@@ -63,10 +64,10 @@ defmodule Cortex.Gateway.AuthTest do
       # This is more of a documentation test — we verify Plug.Crypto.secure_compare
       # is used by confirming the correct behavior (not timing, which is hard to test).
       assert {:ok, _} =
-               Cortex.Gateway.Auth.Bearer.authenticate("correct", token_source: "correct")
+               Bearer.authenticate("correct", token_source: "correct")
 
       assert {:error, :unauthorized} =
-               Cortex.Gateway.Auth.Bearer.authenticate("incorrect", token_source: "correct")
+               Bearer.authenticate("incorrect", token_source: "correct")
     end
   end
 end

@@ -42,23 +42,7 @@ defmodule Cortex.SpawnBackend.Docker.Cleanup do
       {:ok, containers} ->
         count =
           containers
-          |> Enum.map(fn container ->
-            container_id = Map.get(container, "Id", "")
-            container_name = get_container_name(container)
-
-            case client.remove_container(container_id, [{:force, true} | client_opts]) do
-              :ok ->
-                Logger.info("Docker.Cleanup: removed orphan container #{container_name}")
-                1
-
-              {:error, reason} ->
-                Logger.warning(
-                  "Docker.Cleanup: failed to remove #{container_name}: #{inspect(reason)}"
-                )
-
-                0
-            end
-          end)
+          |> Enum.map(&remove_container(&1, client, client_opts))
           |> Enum.sum()
 
         if count > 0 do
@@ -74,6 +58,22 @@ defmodule Cortex.SpawnBackend.Docker.Cleanup do
       {:error, reason} ->
         Logger.warning("Docker.Cleanup: failed to list containers: #{inspect(reason)}")
         {:ok, 0}
+    end
+  end
+
+  defp remove_container(container, client, client_opts) do
+    container_id = Map.get(container, "Id", "")
+    container_name = get_container_name(container)
+
+    case client.remove_container(container_id, [{:force, true} | client_opts]) do
+      :ok ->
+        Logger.info("Docker.Cleanup: removed orphan container #{container_name}")
+        1
+
+      {:error, reason} ->
+        Logger.warning("Docker.Cleanup: failed to remove #{container_name}: #{inspect(reason)}")
+
+        0
     end
   end
 

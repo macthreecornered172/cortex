@@ -480,7 +480,7 @@ defmodule Cortex.Orchestration.OrchestrationQETest do
         for name <- team_names do
           flat = Path.join(log_dir, "#{name}.log")
           nested = Path.wildcard(Path.join([log_dir, "*", "#{name}.log"]))
-          assert File.exists?(flat) or length(nested) >= 1, "Missing log file for #{name}"
+          assert File.exists?(flat) or nested != [], "Missing log file for #{name}"
         end
       after
         cleanup(tmp_dir)

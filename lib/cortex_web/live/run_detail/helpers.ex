@@ -538,25 +538,13 @@ defmodule CortexWeb.RunDetail.Helpers do
   def aggregate_message_flows(nil, _agent_names), do: %{flows: [], total: 0, by_agent: %{}}
 
   def aggregate_message_flows(workspace_path, agent_names) do
-    alias Cortex.Messaging.InboxBridge
-
     # Read outboxes (agent-initiated messages)
     outbox_msgs =
-      Enum.flat_map(agent_names, fn name ->
-        case InboxBridge.read_outbox(workspace_path, name) do
-          {:ok, msgs} -> Enum.map(msgs, fn m -> normalize_message(m, name) end)
-          _ -> []
-        end
-      end)
+      Enum.flat_map(agent_names, &read_outbox_messages(workspace_path, &1))
 
     # Read inboxes (captures knowledge exchange and coordinator deliveries)
     inbox_msgs =
-      Enum.flat_map(agent_names, fn name ->
-        case InboxBridge.read_inbox(workspace_path, name) do
-          {:ok, msgs} -> Enum.map(msgs, fn m -> normalize_message(m, nil, name) end)
-          _ -> []
-        end
-      end)
+      Enum.flat_map(agent_names, &read_inbox_messages(workspace_path, &1))
 
     # Merge and deduplicate by {from, to, content hash}
     all_messages =
@@ -582,6 +570,24 @@ defmodule CortexWeb.RunDetail.Helpers do
       total: Enum.sum(Enum.map(flow_counts, & &1.count)),
       by_agent: by_agent
     }
+  end
+
+  defp read_outbox_messages(workspace_path, name) do
+    alias Cortex.Messaging.InboxBridge
+
+    case InboxBridge.read_outbox(workspace_path, name) do
+      {:ok, msgs} -> Enum.map(msgs, fn m -> normalize_message(m, name) end)
+      _ -> []
+    end
+  end
+
+  defp read_inbox_messages(workspace_path, name) do
+    alias Cortex.Messaging.InboxBridge
+
+    case InboxBridge.read_inbox(workspace_path, name) do
+      {:ok, msgs} -> Enum.map(msgs, fn m -> normalize_message(m, nil, name) end)
+      _ -> []
+    end
   end
 
   defp normalize_message(msg, fallback_from, fallback_to \\ nil) do

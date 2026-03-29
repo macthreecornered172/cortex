@@ -12,6 +12,7 @@ defmodule Cortex.Orchestration.OutputIntegrationTest do
   """
   use CortexWeb.ConnCase
 
+  alias Cortex.Orchestration.Runner
   alias Cortex.Output.Store, as: OutputStore
   alias Cortex.Store
 
@@ -83,7 +84,7 @@ defmodule Cortex.Orchestration.OutputIntegrationTest do
         })
 
       assert {:ok, _summary} =
-               Cortex.Orchestration.Runner.run(yaml_path,
+               Runner.run(yaml_path,
                  command: mock_path,
                  workspace_path: tmp_dir,
                  run_id: run.id

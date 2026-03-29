@@ -237,7 +237,7 @@ defmodule Cortex.Orchestration.Config.Validator do
 
   defp validate_external_blocked(errors, _provider, _context), do: errors
 
-  # TODO(Future): remove this gate when Provider.HTTP ships
+  # NOTE(Future): remove this gate when Provider.HTTP ships
   defp validate_http_blocked(errors, :http, context) do
     ["#{context}: provider 'http' is not yet implemented" | errors]
   end

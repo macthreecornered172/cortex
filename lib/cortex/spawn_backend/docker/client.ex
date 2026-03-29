@@ -122,42 +122,43 @@ defmodule Cortex.SpawnBackend.Docker.Client do
     case connect_socket(socket_path, timeout) do
       {:ok, socket} ->
         request_line = "GET #{path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
-
-        case :gen_tcp.send(socket, request_line) do
-          :ok ->
-            # Skip HTTP headers
-            skip_http_headers(socket, timeout)
-
-            stream =
-              Stream.resource(
-                fn -> socket end,
-                fn sock ->
-                  case :gen_tcp.recv(sock, 0, timeout) do
-                    {:ok, data} ->
-                      # Docker multiplexed stream: strip 8-byte header frames
-                      chunks = strip_docker_stream_headers(data)
-                      {chunks, sock}
-
-                    {:error, :closed} ->
-                      {:halt, sock}
-
-                    {:error, _reason} ->
-                      {:halt, sock}
-                  end
-                end,
-                fn sock -> :gen_tcp.close(sock) end
-              )
-
-            {:ok, stream}
-
-          {:error, reason} ->
-            :gen_tcp.close(socket)
-            {:error, {:send_failed, reason}}
-        end
+        send_and_stream_logs(socket, request_line, timeout)
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp send_and_stream_logs(socket, request_line, timeout) do
+    case :gen_tcp.send(socket, request_line) do
+      :ok ->
+        skip_http_headers(socket, timeout)
+        {:ok, build_log_stream(socket, timeout)}
+
+      {:error, reason} ->
+        :gen_tcp.close(socket)
+        {:error, {:send_failed, reason}}
+    end
+  end
+
+  defp build_log_stream(socket, timeout) do
+    Stream.resource(
+      fn -> socket end,
+      fn sock ->
+        case :gen_tcp.recv(sock, 0, timeout) do
+          {:ok, data} ->
+            chunks = strip_docker_stream_headers(data)
+            {chunks, sock}
+
+          {:error, :closed} ->
+            {:halt, sock}
+
+          {:error, _reason} ->
+            {:halt, sock}
+        end
+      end,
+      fn sock -> :gen_tcp.close(sock) end
+    )
   end
 
   @doc "Creates a Docker network. Returns `{:ok, network_id}`."
@@ -357,26 +358,28 @@ defmodule Cortex.SpawnBackend.Docker.Client do
   defp decode_chunks(data, acc) do
     case String.split(data, "\r\n", parts: 2) do
       [size_hex, rest] ->
-        case Integer.parse(size_hex, 16) do
-          {0, _} ->
-            acc
+        decode_size_and_chunk(size_hex, rest, data, acc)
 
-          {size, _} when byte_size(rest) >= size ->
-            chunk = binary_part(rest, 0, size)
-            # Skip the chunk data + trailing \r\n
-            remaining_start = size + 2
-            remaining_len = byte_size(rest) - remaining_start
+      _ ->
+        acc <> data
+    end
+  end
 
-            if remaining_len > 0 do
-              remaining = binary_part(rest, remaining_start, remaining_len)
-              decode_chunks(remaining, acc <> chunk)
-            else
-              acc <> chunk
-            end
+  defp decode_size_and_chunk(size_hex, rest, data, acc) do
+    case Integer.parse(size_hex, 16) do
+      {0, _} ->
+        acc
 
-          _ ->
-            # Incomplete chunk, return what we have
-            acc <> data
+      {size, _} when byte_size(rest) >= size ->
+        chunk = binary_part(rest, 0, size)
+        remaining_start = size + 2
+        remaining_len = byte_size(rest) - remaining_start
+
+        if remaining_len > 0 do
+          remaining = binary_part(rest, remaining_start, remaining_len)
+          decode_chunks(remaining, acc <> chunk)
+        else
+          acc <> chunk
         end
 
       _ ->

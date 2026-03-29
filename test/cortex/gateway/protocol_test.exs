@@ -6,8 +6,8 @@ defmodule Cortex.Gateway.ProtocolTest do
   alias Cortex.Gateway.Protocol.Messages.{
     HeartbeatMessage,
     PeerRequestMessage,
-    RegisterMessage,
     RegisteredResponse,
+    RegisterMessage,
     StatusUpdateMessage,
     TaskRequestMessage,
     TaskResultMessage

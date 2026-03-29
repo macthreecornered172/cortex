@@ -12,7 +12,7 @@ defmodule Cortex.SpawnBackend.ExternalSpawnerTest do
       assert {:ok, port} = ExternalSpawner.pick_free_port()
       assert is_integer(port)
       assert port > 0
-      assert port < 65536
+      assert port < 65_536
     end
 
     test "returns different ports on successive calls" do

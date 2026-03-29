@@ -800,25 +800,27 @@ defmodule CortexWeb.WorkflowsLive do
     file_path = String.trim(socket.assigns.file_path)
 
     cond do
-      # File path takes priority when set — user explicitly chose a file
       file_path != "" ->
-        case File.read(file_path) do
-          {:ok, content} ->
-            content
-
-          _ ->
-            # Try relative to project root
-            case File.read(Path.join(File.cwd!(), file_path)) do
-              {:ok, content} -> content
-              _ -> ""
-            end
-        end
+        read_yaml_file(file_path)
 
       socket.assigns.yaml_content != "" ->
         socket.assigns.yaml_content
 
       true ->
         ""
+    end
+  end
+
+  defp read_yaml_file(file_path) do
+    case File.read(file_path) do
+      {:ok, content} ->
+        content
+
+      _ ->
+        case File.read(Path.join(File.cwd!(), file_path)) do
+          {:ok, content} -> content
+          _ -> ""
+        end
     end
   end
 

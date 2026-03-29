@@ -331,9 +331,7 @@ defmodule Cortex.Gateway.Registry do
   end
 
   def handle_call({:update_status, agent_id, status}, _from, state) do
-    unless RegisteredAgent.valid_status?(status) do
-      {:reply, {:error, :invalid_status}, state}
-    else
+    if RegisteredAgent.valid_status?(status) do
       case Map.get(state.agents, agent_id) do
         nil ->
           {:reply, {:error, :not_found}, state}
@@ -352,6 +350,8 @@ defmodule Cortex.Gateway.Registry do
 
           {:reply, :ok, new_state}
       end
+    else
+      {:reply, {:error, :invalid_status}, state}
     end
   end
 

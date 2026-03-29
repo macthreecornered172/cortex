@@ -41,11 +41,11 @@ defmodule Cortex.SpawnBackend.K8sTest do
         team_name: "researcher",
         run_id: "run-123",
         conn: nil,
-        created_at: 12345
+        created_at: 12_345
       }
 
       assert handle.run_id == "run-123"
-      assert handle.created_at == 12345
+      assert handle.created_at == 12_345
     end
   end
 
