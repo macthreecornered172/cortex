@@ -1,4 +1,4 @@
-.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-elixir-all e2e-local e2e-docker-simple e2e-docker-multi e2e-docker-simple-claude e2e-docker-multi-claude docker-integration e2e-shell e2e-elixir sidecar-build worker-build sidecar-test sidecar-lint sidecar-check docker-combo docker-combo-claude e2e-k8s-setup e2e-k8s-setup-claude e2e-k8s-simple e2e-k8s-multi e2e-k8s-simple-claude e2e-k8s-multi-claude e2e-k8s-observability e2e-k8s-teardown
+.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-elixir-all e2e-local e2e-gate e2e-gate-claude e2e-docker-simple e2e-docker-multi e2e-docker-simple-claude e2e-docker-multi-claude docker-integration e2e-shell e2e-elixir sidecar-build worker-build sidecar-test sidecar-lint sidecar-check docker-combo docker-combo-claude e2e-k8s-setup e2e-k8s-setup-claude e2e-k8s-simple e2e-k8s-multi e2e-k8s-simple-claude e2e-k8s-multi-claude e2e-k8s-observability e2e-k8s-teardown
 
 # -- Development --
 
@@ -151,6 +151,12 @@ sidecar-test: ## Go: sidecar unit tests
 
 docker-integration: ## Docker API lifecycle: container CRUD, networks, labels, logs
 	cd e2e && go test -v -run "^TestDocker[^D]" -timeout 120s
+
+e2e-gate: ## Gate flow: gated 2-tier DAG with approve/reject (mock agent, no sidecar)
+	cd e2e && go test -v -run TestGate -timeout 120s
+
+e2e-gate-claude: ## Gate flow with real Claude (requires ANTHROPIC_API_KEY)
+	cd e2e && go test -v -run TestGateClaude -timeout 300s
 
 e2e-cli: ## CLI provider: single-team DAG (real Claude, no sidecar/containers)
 	cd e2e && go test -v -run TestCLIDAGSimple -timeout 300s

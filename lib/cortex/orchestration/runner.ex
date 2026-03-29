@@ -49,6 +49,8 @@ defmodule Cortex.Orchestration.Runner do
   alias Cortex.Orchestration.Runner.Executor
   alias Cortex.Orchestration.Runner.Reconciler
 
+  require Logger
+
   @doc """
   Runs a full orchestration from a YAML config file.
 
@@ -77,7 +79,7 @@ defmodule Cortex.Orchestration.Runner do
     continue_on_error = Keyword.get(opts, :continue_on_error, false)
     dry_run = Keyword.get(opts, :dry_run, false)
     workspace_path = Keyword.get(opts, :workspace_path, ".")
-    command = Keyword.get(opts, :command, "claude")
+    command = Keyword.get(opts, :command, default_command())
     run_id = Keyword.get(opts, :run_id)
     coordinator = Keyword.get(opts, :coordinator, false)
 
@@ -203,7 +205,7 @@ defmodule Cortex.Orchestration.Runner do
   """
   @spec continue_run(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def continue_run(run_id, opts \\ []) do
-    command = Keyword.get(opts, :command, "claude")
+    command = Keyword.get(opts, :command, default_command())
     continue_on_error = Keyword.get(opts, :continue_on_error, true)
 
     coordinator = Keyword.get(opts, :coordinator, nil)
@@ -220,9 +222,167 @@ defmodule Cortex.Orchestration.Runner do
           else: coordinator
 
       Executor.execute_continuation(
-        run, config, all_tiers, command, continue_on_error, spawn_coordinator
+        run,
+        config,
+        all_tiers,
+        command,
+        continue_on_error,
+        spawn_coordinator
       )
     end
+  end
+
+  @doc """
+  Approves a gated run, allowing it to continue execution.
+
+  Idempotent: if the run is not in "gated" status, returns `{:ok, :noop}`.
+
+  ## Options
+
+    - `:decided_by` — who approved (string)
+    - `:notes` — optional notes injected into downstream agent prompts
+    - `:command` — override the claude command (default "claude")
+    - `:continue_on_error` — continue past tier failures (default true)
+
+  """
+  @spec approve_gate(String.t(), keyword()) :: {:ok, term()} | {:error, term()}
+  def approve_gate(run_id, opts \\ []) do
+    with {:ok, run} <- fetch_run(run_id),
+         :gated <- check_gated(run) do
+      resolve_pending_gate(run_id, "approved", opts)
+
+      Cortex.Store.update_run(run, %{status: "running", gated_at_tier: nil})
+      Cortex.Events.broadcast(:gate_approved, %{run_id: run_id, tier: run.gated_at_tier})
+
+      continue_run(run_id, opts)
+    else
+      :not_gated -> {:ok, :noop}
+      error -> error
+    end
+  end
+
+  @doc """
+  Rejects a gated run, cancelling it permanently.
+
+  Idempotent: if the run is not in "gated" status, returns `{:ok, :noop}`.
+
+  ## Options
+
+    - `:decided_by` — who rejected (string)
+    - `:notes` — optional reason for rejection
+
+  """
+  @spec reject_gate(String.t(), keyword()) :: {:ok, :rejected | :noop} | {:error, term()}
+  def reject_gate(run_id, opts \\ []) do
+    with {:ok, run} <- fetch_run(run_id),
+         :gated <- check_gated(run) do
+      resolve_pending_gate(run_id, "rejected", opts)
+
+      Cortex.Store.update_run(run, %{
+        status: "cancelled",
+        gated_at_tier: nil,
+        completed_at: DateTime.utc_now()
+      })
+
+      Cortex.Events.broadcast(:run_cancelled, %{run_id: run_id})
+      {:ok, :rejected}
+    else
+      :not_gated -> {:ok, :noop}
+      error -> error
+    end
+  end
+
+  @doc """
+  Cancels any active run (running or gated).
+
+  For running runs: looks up the executor process and sends a shutdown signal,
+  then marks the run and incomplete team_runs as cancelled.
+
+  For gated runs: equivalent to `reject_gate/2` without requiring notes.
+
+  Idempotent: if the run is already completed/failed/cancelled, returns `{:ok, :noop}`.
+  """
+  @spec cancel_run(String.t()) :: {:ok, :cancelled | :noop} | {:error, term()}
+  def cancel_run(run_id) do
+    with {:ok, run} <- fetch_run(run_id) do
+      do_cancel(run_id, run)
+    end
+  end
+
+  defp do_cancel(_run_id, %{status: status})
+       when status in ["completed", "failed", "cancelled", "stopped"],
+       do: {:ok, :noop}
+
+  defp do_cancel(run_id, %{status: "gated"}),
+    do: reject_gate(run_id, notes: "Cancelled by user")
+
+  defp do_cancel(run_id, run) do
+    stop_runner_process(run_id)
+    cancel_incomplete_teams(run_id)
+
+    Cortex.Store.update_run(run, %{
+      status: "cancelled",
+      completed_at: DateTime.utc_now()
+    })
+
+    Cortex.Events.broadcast(:run_cancelled, %{run_id: run_id})
+    {:ok, :cancelled}
+  end
+
+  defp cancel_incomplete_teams(run_id) do
+    run_id
+    |> Cortex.Store.get_team_runs()
+    |> Enum.filter(fn tr -> tr.status in ["pending", "running"] end)
+    |> Enum.each(fn tr ->
+      Cortex.Store.update_team_run(tr, %{
+        status: "cancelled",
+        completed_at: DateTime.utc_now()
+      })
+    end)
+  end
+
+  defp default_command, do: System.get_env("CLAUDE_COMMAND") || "claude"
+
+  defp check_gated(%{status: "gated"}), do: :gated
+  defp check_gated(_run), do: :not_gated
+
+  defp resolve_pending_gate(run_id, decision, opts) do
+    decided_by = Keyword.get(opts, :decided_by)
+    notes = Keyword.get(opts, :notes)
+
+    case Cortex.Store.get_pending_gate(run_id) do
+      nil ->
+        :ok
+
+      gd ->
+        Cortex.Store.update_gate_decision(gd, %{
+          decision: decision,
+          decided_by: decided_by,
+          notes: notes
+        })
+    end
+  end
+
+  defp stop_runner_process(run_id) do
+    # Stop coordinator first (stops dispatching new work)
+    case Registry.lookup(Cortex.Orchestration.RunnerRegistry, {:coordinator, run_id}) do
+      [{pid, _}] ->
+        if Process.alive?(pid), do: Process.exit(pid, :shutdown)
+
+      [] ->
+        :ok
+    end
+
+    # Stop the executor
+    case Registry.lookup(Cortex.Orchestration.RunnerRegistry, {:runner, run_id}) do
+      [{pid, _}] ->
+        if Process.alive?(pid), do: Process.exit(pid, :shutdown)
+
+      [] ->
+        :ok
+    end
+  rescue
+    _ -> :ok
   end
 
   defp fetch_run(run_id) do

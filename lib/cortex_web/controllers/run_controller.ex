@@ -131,8 +131,10 @@ defmodule CortexWeb.RunController do
         })
 
         case Runner.run(yaml_path, workspace_path: tmp_dir, run_id: run.id) do
+          {:ok, %{status: :gated} = result} ->
+            Logger.info("Run #{run.id} gated at tier #{result.gated_at_tier}")
+
           {:ok, _summary} ->
-            Store.update_run(run, %{status: "completed", completed_at: DateTime.utc_now()})
             Logger.info("Run #{run.id} completed")
 
           {:error, reason} ->
@@ -155,6 +157,7 @@ defmodule CortexWeb.RunController do
       team_count: run.team_count,
       total_cost_usd: run.total_cost_usd,
       total_duration_ms: run.total_duration_ms,
+      gated_at_tier: run.gated_at_tier,
       started_at: run.started_at,
       completed_at: run.completed_at,
       inserted_at: run.inserted_at,

@@ -82,6 +82,7 @@ defmodule CortexWeb.TeamRunController do
       num_turns: tr.num_turns,
       session_id: tr.session_id,
       result_summary: tr.result_summary,
+      prompt: tr.prompt,
       has_output: tr.output_key != nil,
       log_path: tr.log_path,
       started_at: tr.started_at,

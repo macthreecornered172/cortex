@@ -29,10 +29,37 @@ defmodule Cortex.Orchestration.Injection do
   A string containing the complete prompt with all sections assembled.
   """
   @spec build_prompt(Team.t(), String.t(), State.t(), Defaults.t()) :: String.t()
-  def build_prompt(%Team{} = team, project_name, %State{} = state, %Defaults{} = _defaults) do
+  def build_prompt(%Team{} = team, project_name, %State{} = state, %Defaults{} = defaults) do
+    build_prompt(team, project_name, state, defaults, [])
+  end
+
+  @doc """
+  Constructs the full prompt string with optional gate notes from prior approvals.
+
+  ## Parameters
+
+    - `team` — a `%Team{}` struct describing the team
+    - `project_name` — the project name string
+    - `state` — a `%State{}` struct containing upstream team results
+    - `defaults` — a `%Defaults{}` struct with fallback settings
+    - `gate_notes` — list of `%GateDecision{}` structs with approved notes
+
+  ## Returns
+
+  A string containing the complete prompt with all sections assembled.
+  """
+  @spec build_prompt(Team.t(), String.t(), State.t(), Defaults.t(), list()) :: String.t()
+  def build_prompt(
+        %Team{} = team,
+        project_name,
+        %State{} = state,
+        %Defaults{} = _defaults,
+        gate_notes
+      ) do
     sections = [
       build_header(team, project_name),
       build_context_section(team),
+      build_gate_notes_section(gate_notes),
       build_team_section(team),
       build_tasks_section(team),
       build_dependencies_section(team, state),
@@ -227,6 +254,29 @@ defmodule Cortex.Orchestration.Injection do
   defp has_members?(nil), do: false
   defp has_members?([]), do: false
   defp has_members?(_members), do: true
+
+  defp build_gate_notes_section([]), do: nil
+  defp build_gate_notes_section(nil), do: nil
+
+  defp build_gate_notes_section(gate_notes) when is_list(gate_notes) do
+    gate_notes
+    |> Enum.filter(&has_note_content?/1)
+    |> format_gate_notes()
+  end
+
+  defp has_note_content?(gd), do: is_binary(gd.notes) and String.trim(gd.notes) != ""
+
+  defp format_gate_notes([]), do: nil
+
+  defp format_gate_notes(notes) do
+    note_blocks = Enum.map(notes, &format_single_gate_note/1)
+    "## Human Review Notes\n\n#{Enum.join(note_blocks, "\n\n")}"
+  end
+
+  defp format_single_gate_note(gd) do
+    by = if gd.decided_by, do: " (approved by #{gd.decided_by})", else: ""
+    "After tier #{gd.tier}#{by}:\n  #{String.trim(gd.notes)}"
+  end
 
   defp build_instructions_section do
     "## Instructions\n" <>

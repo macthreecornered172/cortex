@@ -155,6 +155,36 @@ defmodule Cortex.Orchestration.Config.Team do
         }
 end
 
+defmodule Cortex.Orchestration.Config.Gates do
+  @moduledoc """
+  Gate declarations for human-in-the-loop tier boundaries.
+
+  Gates pause execution after a tier completes and wait for human approval
+  before proceeding to the next tier.
+
+  ## Fields
+
+    - `after_tier` — a MapSet of tier indices that trigger a gate after completion
+    - `every_tier` — if true, gate after every tier (default: `false`)
+
+  """
+
+  defstruct after_tier: MapSet.new(),
+            every_tier: false
+
+  @type t :: %__MODULE__{
+          after_tier: MapSet.t(non_neg_integer()),
+          every_tier: boolean()
+        }
+
+  @doc "Returns true if a gate should fire after the given tier index."
+  @spec gated?(t(), non_neg_integer()) :: boolean()
+  def gated?(%__MODULE__{every_tier: true}, _tier_index), do: true
+
+  def gated?(%__MODULE__{after_tier: after_tier}, tier_index),
+    do: MapSet.member?(after_tier, tier_index)
+end
+
 defmodule Cortex.Orchestration.Config do
   @moduledoc """
   Top-level configuration struct for an orchestra project definition.
@@ -170,13 +200,14 @@ defmodule Cortex.Orchestration.Config do
 
   """
 
-  alias Cortex.Orchestration.Config.{Defaults, Team}
+  alias Cortex.Orchestration.Config.{Defaults, Gates, Team}
 
   @enforce_keys [:name, :teams]
   defstruct [
     :name,
     :workspace_path,
     defaults: %Defaults{},
+    gates: %Gates{},
     teams: []
   ]
 
@@ -184,6 +215,7 @@ defmodule Cortex.Orchestration.Config do
           name: String.t(),
           workspace_path: String.t() | nil,
           defaults: Defaults.t(),
+          gates: Gates.t(),
           teams: [Team.t()]
         }
 end

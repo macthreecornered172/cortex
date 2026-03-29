@@ -18,6 +18,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
   alias Cortex.Messaging.InboxBridge
   alias Cortex.Messaging.OutboxWatcher
   alias Cortex.Orchestration.Config
+  alias Cortex.Orchestration.Config.Gates
   alias Cortex.Orchestration.Coordinator.Config, as: CoordConfig
   alias Cortex.Orchestration.Coordinator.Lifecycle, as: CoordLifecycle
   alias Cortex.Orchestration.Injection
@@ -336,21 +337,89 @@ defmodule Cortex.Orchestration.Runner.Executor do
     tiers
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, :complete}, fn {team_names, tier_index}, acc ->
-      if team_names == [] do
-        # All teams in this tier already completed -- skip
-        {:cont, acc}
-      else
-        execute_tier(
-          team_names,
-          tier_index,
-          config,
-          workspace,
-          command,
-          continue_on_error,
-          run_id,
-          acc
-        )
+      run_tier_step(
+        team_names,
+        tier_index,
+        config,
+        workspace,
+        command,
+        continue_on_error,
+        run_id,
+        acc
+      )
+    end)
+  end
+
+  defp run_tier_step(
+         [] = _team_names,
+         _tier_index,
+         _config,
+         _workspace,
+         _command,
+         _coe,
+         _run_id,
+         acc
+       ) do
+    {:cont, acc}
+  end
+
+  defp run_tier_step(
+         team_names,
+         tier_index,
+         config,
+         workspace,
+         command,
+         continue_on_error,
+         run_id,
+         acc
+       ) do
+    case execute_tier(
+           team_names,
+           tier_index,
+           config,
+           workspace,
+           command,
+           continue_on_error,
+           run_id,
+           acc
+         ) do
+      {:cont, _} = cont -> maybe_gate_after_tier(cont, tier_index, config.gates, run_id)
+      halt -> halt
+    end
+  end
+
+  # Checks if a gate should fire after the given tier. If so, persists
+  # the gate state and halts the tier walker.
+  defp maybe_gate_after_tier(cont, tier_index, %Gates{} = gates, run_id) do
+    if Gates.gated?(gates, tier_index) do
+      persist_gate(run_id, tier_index)
+      broadcast(:gate_pending, %{run_id: run_id, tier: tier_index})
+      {:halt, {:gated, tier_index}}
+    else
+      cont
+    end
+  end
+
+  defp persist_gate(nil, _tier_index), do: :ok
+
+  defp persist_gate(run_id, tier_index) do
+    RunnerStore.safe_call(fn ->
+      case Cortex.Store.get_run(run_id) do
+        nil ->
+          :ok
+
+        run ->
+          Cortex.Store.update_run(run, %{
+            status: "gated",
+            gated_at_tier: tier_index
+          })
       end
+
+      Cortex.Store.create_gate_decision(%{
+        run_id: run_id,
+        tier: tier_index,
+        decision: "pending"
+      })
     end)
   end
 
@@ -425,7 +494,9 @@ defmodule Cortex.Orchestration.Runner.Executor do
     max_turns = Injection.build_max_turns(config.defaults)
     permission_mode = Injection.build_permission_mode(config.defaults)
     timeout_minutes = config.defaults.timeout_minutes
-    prompt = Injection.build_prompt(team, config.name, state, config.defaults)
+
+    gate_notes = fetch_gate_notes(run_id)
+    prompt = Injection.build_prompt(team, config.name, state, config.defaults, gate_notes)
     log_path = Workspace.log_path(workspace, run_id, team_name)
 
     on_token_update = fn name, tokens ->
@@ -823,6 +894,19 @@ defmodule Cortex.Orchestration.Runner.Executor do
     build_summary(config, workspace, run_duration)
   end
 
+  defp finalize_fresh({:gated, tier_index}, run_id, config, _workspace, run_duration) do
+    broadcast(:run_completed, %{
+      project: config.name,
+      duration_ms: run_duration,
+      status: :gated
+    })
+
+    # Don't mark as completed — run is paused at a gate
+    persist_gated_run(run_id, run_duration)
+
+    {:ok, %{status: :gated, run_id: run_id, gated_at_tier: tier_index, duration_ms: run_duration}}
+  end
+
   defp finalize_fresh(
          {:error, {:tier_failed, _tier_index, _failures}} = error,
          run_id,
@@ -863,6 +947,18 @@ defmodule Cortex.Orchestration.Runner.Executor do
     {:ok, %{status: :continued, run_id: run_id, duration_ms: run_duration}}
   end
 
+  defp finalize_continuation({:gated, tier_index}, run_id, config, run_duration) do
+    broadcast(:run_completed, %{
+      project: config.name,
+      duration_ms: run_duration,
+      status: :gated
+    })
+
+    persist_gated_run(run_id, run_duration)
+
+    {:ok, %{status: :gated, run_id: run_id, gated_at_tier: tier_index, duration_ms: run_duration}}
+  end
+
   defp finalize_continuation({:error, _} = error, run_id, config, run_duration) do
     broadcast(:run_completed, %{
       project: config.name,
@@ -882,6 +978,15 @@ defmodule Cortex.Orchestration.Runner.Executor do
   end
 
   # -- Shared private functions ------------------------------------------------
+
+  defp fetch_gate_notes(nil), do: []
+
+  defp fetch_gate_notes(run_id) do
+    case RunnerStore.safe_call(fn -> Cortex.Store.get_approved_gate_notes(run_id) end) do
+      notes when is_list(notes) -> notes
+      _ -> []
+    end
+  end
 
   defp find_team(teams, name) do
     Enum.find(teams, fn t -> t.name == name end)
@@ -947,7 +1052,8 @@ defmodule Cortex.Orchestration.Runner.Executor do
 
   defp upsert_team_run_record(run_id, name, config, state, workspace, tier_index) do
     team = find_team(config.teams, name)
-    team_prompt = Injection.build_prompt(team, config.name, state, config.defaults)
+    gate_notes = fetch_gate_notes(run_id)
+    team_prompt = Injection.build_prompt(team, config.name, state, config.defaults, gate_notes)
     team_log_path = Workspace.log_path(workspace, run_id, name)
 
     RunnerStore.safe_call(fn ->
@@ -1057,6 +1163,30 @@ defmodule Cortex.Orchestration.Runner.Executor do
       |> Enum.filter(fn tr -> tr.internal and tr.status == "running" end)
       |> Enum.each(fn tr ->
         Cortex.Store.update_team_run(tr, %{status: "completed", completed_at: now})
+      end)
+    end)
+  end
+
+  defp persist_gated_run(nil, _run_duration), do: :ok
+
+  defp persist_gated_run(run_id, run_duration) do
+    RunnerStore.safe_call(fn ->
+      case Cortex.Store.get_run(run_id) do
+        nil ->
+          :ok
+
+        run ->
+          Cortex.Store.update_run(run, %{
+            total_duration_ms: (run.total_duration_ms || 0) + run_duration
+          })
+      end
+
+      # Mark any running internal team_runs as stopped (coordinator etc.)
+      run_id
+      |> Cortex.Store.get_team_runs()
+      |> Enum.filter(fn tr -> tr.internal and tr.status == "running" end)
+      |> Enum.each(fn tr ->
+        Cortex.Store.update_team_run(tr, %{status: "stopped", completed_at: DateTime.utc_now()})
       end)
     end)
   end

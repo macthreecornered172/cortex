@@ -8,7 +8,7 @@ defmodule Cortex.Store.Schemas.Run do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias Cortex.Store.Schemas.TeamRun
+  alias Cortex.Store.Schemas.{GateDecision, TeamRun}
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -30,19 +30,21 @@ defmodule Cortex.Store.Schemas.Run do
     field(:mode, :string, default: "workflow")
     field(:gossip_rounds_completed, :integer, default: 0)
     field(:gossip_rounds_total, :integer, default: 0)
+    field(:gated_at_tier, :integer)
 
     has_many(:team_runs, TeamRun)
+    has_many(:gate_decisions, GateDecision)
 
     timestamps(type: :utc_datetime_usec)
   end
 
   @required_fields ~w(name)a
-  @optional_fields ~w(config_yaml status team_count total_cost_usd total_input_tokens total_output_tokens total_cache_read_tokens total_cache_creation_tokens total_duration_ms started_at completed_at workspace_path mode gossip_rounds_completed gossip_rounds_total)a
+  @optional_fields ~w(config_yaml status team_count total_cost_usd total_input_tokens total_output_tokens total_cache_read_tokens total_cache_creation_tokens total_duration_ms started_at completed_at workspace_path mode gossip_rounds_completed gossip_rounds_total gated_at_tier)a
 
   def changeset(run, attrs) do
     run
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
-    |> validate_inclusion(:status, ~w(pending running completed failed stopped))
+    |> validate_inclusion(:status, ~w(pending running completed failed stopped gated cancelled))
   end
 end

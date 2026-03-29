@@ -67,6 +67,7 @@ defmodule Cortex.Orchestration.Config.Validator do
     |> validate_no_cycles(config)
     |> validate_provider_backend(config)
     |> validate_backend_requires_external(config)
+    |> validate_gates(config)
     |> Enum.reverse()
   end
 
@@ -282,6 +283,35 @@ defmodule Cortex.Orchestration.Config.Validator do
   end
 
   defp check_provider_backend_compat(errors, _provider, _backend, _context), do: errors
+
+  defp validate_gates(errors, %Config{gates: gates, teams: teams}) do
+    after_tier = gates.after_tier
+
+    if MapSet.size(after_tier) > 0 do
+      # Build max tier index from DAG to validate gate references
+      # We can't build the full DAG here (that's DAG.build_tiers), but we
+      # can check that tier indices are non-negative integers. The upper
+      # bound is validated at runtime when the DAG is actually built.
+      invalid =
+        after_tier
+        |> MapSet.to_list()
+        |> Enum.filter(fn idx -> not is_integer(idx) or idx < 0 end)
+
+      case invalid do
+        [] ->
+          errors
+
+        bad ->
+          ["gates.after_tier contains invalid tier indices: #{inspect(bad)}" | errors]
+      end
+    else
+      # No after_tier gates; if every_tier is false and there are no gates
+      # at all, that's fine (no gates configured).
+      # If every_tier is true with no teams, warn at runtime.
+      _ = teams
+      errors
+    end
+  end
 
   # --- Soft Warning Collection ---
 

@@ -17,7 +17,7 @@ defmodule Cortex.Orchestration.Config.Loader do
   """
 
   alias Cortex.Orchestration.Config
-  alias Cortex.Orchestration.Config.{Defaults, Lead, Member, Task, Team}
+  alias Cortex.Orchestration.Config.{Defaults, Gates, Lead, Member, Task, Team}
   alias Cortex.Orchestration.Config.Validator
 
   @doc """
@@ -76,9 +76,26 @@ defmodule Cortex.Orchestration.Config.Loader do
       name: Map.get(raw, "name", ""),
       workspace_path: Map.get(raw, "workspace_path"),
       defaults: build_defaults(Map.get(raw, "defaults")),
+      gates: build_gates(Map.get(raw, "gates")),
       teams: build_teams(Map.get(raw, "teams"))
     }
   end
+
+  defp build_gates(nil), do: %Gates{}
+
+  defp build_gates(raw) when is_map(raw) do
+    every_tier = Map.get(raw, "every_tier", false)
+
+    after_tier =
+      case Map.get(raw, "after_tier") do
+        list when is_list(list) -> MapSet.new(list)
+        _ -> MapSet.new()
+      end
+
+    %Gates{after_tier: after_tier, every_tier: every_tier == true}
+  end
+
+  defp build_gates(_), do: %Gates{}
 
   defp build_defaults(nil), do: %Defaults{}
 

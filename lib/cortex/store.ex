@@ -11,7 +11,7 @@ defmodule Cortex.Store do
   import Ecto.Query
 
   alias Cortex.Repo
-  alias Cortex.Store.Schemas.{EventLog, Run, TeamRun}
+  alias Cortex.Store.Schemas.{EventLog, GateDecision, Run, TeamRun}
 
   # ── Runs ──────────────────────────────────────────────────────────
 
@@ -216,6 +216,55 @@ defmodule Cortex.Store do
       order_by: [desc: tr.started_at],
       limit: ^limit,
       preload: [:run]
+    )
+    |> Repo.all()
+  end
+
+  # ── Gate Decisions ────────────────────────────────────────────────
+
+  @doc "Creates a new gate decision (typically with decision: pending)."
+  @spec create_gate_decision(map()) :: {:ok, GateDecision.t()} | {:error, term()}
+  def create_gate_decision(attrs) do
+    %GateDecision{}
+    |> GateDecision.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @doc "Updates an existing gate decision (e.g., pending → approved/rejected)."
+  @spec update_gate_decision(GateDecision.t(), map()) ::
+          {:ok, GateDecision.t()} | {:error, term()}
+  def update_gate_decision(%GateDecision{} = gd, attrs) do
+    gd
+    |> GateDecision.changeset(attrs)
+    |> Repo.update()
+  end
+
+  @doc "Gets all gate decisions for a run, ordered by tier then inserted_at."
+  @spec get_gate_decisions(String.t()) :: [GateDecision.t()]
+  def get_gate_decisions(run_id) do
+    from(gd in GateDecision,
+      where: gd.run_id == ^run_id,
+      order_by: [asc: gd.tier, asc: gd.inserted_at]
+    )
+    |> Repo.all()
+  end
+
+  @doc "Gets the pending gate decision for a run, if any."
+  @spec get_pending_gate(String.t()) :: GateDecision.t() | nil
+  def get_pending_gate(run_id) do
+    from(gd in GateDecision,
+      where: gd.run_id == ^run_id and gd.decision == "pending",
+      limit: 1
+    )
+    |> Repo.one()
+  end
+
+  @doc "Gets all approved gate decisions with non-nil notes for prompt injection."
+  @spec get_approved_gate_notes(String.t()) :: [GateDecision.t()]
+  def get_approved_gate_notes(run_id) do
+    from(gd in GateDecision,
+      where: gd.run_id == ^run_id and gd.decision == "approved" and not is_nil(gd.notes),
+      order_by: [asc: gd.tier, asc: gd.inserted_at]
     )
     |> Repo.all()
   end
